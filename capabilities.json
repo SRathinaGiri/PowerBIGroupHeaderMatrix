@@ -1,0 +1,249 @@
+{
+    "dataRoles": [
+        {
+            "displayName": "Rows",
+            "name": "row",
+            "kind": "Grouping"
+        },
+        {
+            "displayName": "Columns",
+            "name": "columns",
+            "kind": "Grouping"
+        },
+        {
+            "displayName": "Values",
+            "name": "measure",
+            "kind": "Measure"
+        },
+        {
+            "displayName": "Cell Background Color",
+            "name": "cellBgColor",
+            "kind": "Measure"
+        },
+        {
+            "displayName": "Cell Font Color",
+            "name": "cellFontColor",
+            "kind": "Measure"
+        }
+    ],
+    "objects": {
+        "dataPoint": {
+            "properties": {
+                "defaultColor": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "showAllDataPoints": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "fill": {
+                    "type": {
+                        "fill": {
+                            "solid": {
+                                "color": true
+                            }
+                        }
+                    }
+                },
+                "fillRule": {
+                    "type": {
+                        "fill": {}
+                    }
+                },
+                 "fontSize": {
+                    "type": {
+                        "formatting": {
+                            "fontSize": true
+                        }
+                    }
+                }
+            }
+        },
+        "state": {
+            "displayName": "State",
+            "properties": {
+                "columnWidths": { "type": { "text": true } },
+                "collapsedCols": { "type": { "text": true } },
+                "collapsedRows": { "type": { "text": true } },
+                "stickyHeaders": { "type": { "bool": true } },
+                "repeatLabels": { "type": { "bool": true } },
+                "compactLayout": { "type": { "bool": true } }
+            }
+        },
+        "grandTotal": {
+            "displayName": "Grand Total",
+            "properties": {
+                "show": { "type": { "bool": true } },
+                "fallbackToRootValues": { "type": { "bool": true } },
+                "position": { "type": { "enumeration": [
+                    { "displayName": "Top", "value": "Top" },
+                    { "displayName": "Bottom", "value": "Bottom" }
+                ] } }
+            }
+        },
+        "labels": {
+            "displayName": "Labels",
+            "properties": {
+                "rowHeaderFontSize": { "type": { "numeric": true } },
+                "rowHeaderFontFamily": { "type": { "enumeration": [
+                    { "displayName": "Segoe UI", "value": "Segoe UI" },
+                    { "displayName": "Arial", "value": "Arial" },
+                    { "displayName": "Verdana", "value": "Verdana" },
+                    { "displayName": "Tahoma", "value": "Tahoma" },
+                    { "displayName": "Calibri", "value": "Calibri" },
+                    { "displayName": "Times New Roman", "value": "Times New Roman" }
+                ] } },
+                "rowHeaderBold": { "type": { "bool": true } },
+                "colHeaderFontSize": { "type": { "numeric": true } },
+                "colHeaderFontFamily": { "type": { "enumeration": [
+                    { "displayName": "Segoe UI", "value": "Segoe UI" },
+                    { "displayName": "Arial", "value": "Arial" },
+                    { "displayName": "Verdana", "value": "Verdana" },
+                    { "displayName": "Tahoma", "value": "Tahoma" },
+                    { "displayName": "Calibri", "value": "Calibri" },
+                    { "displayName": "Times New Roman", "value": "Times New Roman" }
+                ] } },
+                "colHeaderBold": { "type": { "bool": true } },
+                "dataFontSize": { "type": { "numeric": true } },
+                "dataFontFamily": { "type": { "enumeration": [
+                    { "displayName": "Segoe UI", "value": "Segoe UI" },
+                    { "displayName": "Arial", "value": "Arial" },
+                    { "displayName": "Verdana", "value": "Verdana" },
+                    { "displayName": "Tahoma", "value": "Tahoma" },
+                    { "displayName": "Calibri", "value": "Calibri" },
+                    { "displayName": "Times New Roman", "value": "Times New Roman" }
+                ] } },
+                "dataBold": { "type": { "bool": true } }
+            }
+        },
+        "colors": {
+            "displayName": "Colors",
+            "properties": {
+                "rowHeaderColor": { "type": { "fill": { "solid": { "color": true } } } },
+                "rowHeaderBg": { "type": { "fill": { "solid": { "color": true } } } },
+                "colHeaderColor": { "type": { "fill": { "solid": { "color": true } } } },
+                "colHeaderBg": { "type": { "fill": { "solid": { "color": true } } } },
+                "cellColor": { "type": { "fill": { "solid": { "color": true } } } },
+                "cellBg": { "type": { "fill": { "solid": { "color": true } } } }
+            }
+        },
+        "labelStylePerLevel": {
+            "displayName": "Label Style (Per Level)",
+            "properties": {
+                "fontFamily": { "type": { "text": true } },
+                "fontSize": { "type": { "numeric": true } },
+                "fontWeight": { "type": { "text": true } },
+                "italic": { "type": { "bool": true } },
+                "underline": { "type": { "bool": true } }
+            }
+        },
+        "subtotal": {
+            "displayName": "Subtotals",
+            "properties": {
+                "rowSubtotals": { "type": { "bool": true } },
+                "columnSubtotals": { "type": { "bool": true } },
+                "rowSubtotalsType": { "type": { "enumeration": [
+                    { "displayName": "Top", "value": "Top" },
+                    { "displayName": "Bottom", "value": "Bottom" }
+                ] } },
+                "rowSubtotalsPerLevel": { "type": { "bool": true } },
+                "columnSubtotalsPerLevel": { "type": { "bool": true } }
+            }
+        },
+        "subtotalPerLevel": {
+            "displayName": "Subtotals (Per Level)",
+            "properties": {
+                "levelSubtotalEnabled": { "type": { "bool": true } }
+            }
+        },
+        "measureColors": {
+            "displayName": "Measure colors",
+            "properties": {
+                "cellFontColor": { "type": { "fill": { "solid": { "color": true } } } },
+                "cellBgColor": { "type": { "fill": { "solid": { "color": true } } } }
+            }
+        },
+        "grid": {
+            "displayName": "Grid",
+            "properties": {
+                "showHorizontal": { "type": { "bool": true } },
+                "showVertical": { "type": { "bool": true } },
+                "thickness": { "type": { "numeric": true } },
+                "color": { "type": { "fill": { "solid": { "color": true } } } }
+            }
+        },
+        "zebra": {
+            "displayName": "Zebra striping",
+            "properties": {
+                "enabled": { "type": { "bool": true } },
+                "oddColor": { "type": { "fill": { "solid": { "color": true } } } },
+                "evenColor": { "type": { "fill": { "solid": { "color": true } } } }
+            }
+        },
+        "zebraColumns": {
+            "displayName": "Column striping",
+            "properties": {
+                "enabled": { "type": { "bool": true } },
+                "oddColor": { "type": { "fill": { "solid": { "color": true } } } },
+                "evenColor": { "type": { "fill": { "solid": { "color": true } } } }
+            }
+        }
+    },
+    "dataViewMappings": [
+        {
+            "matrix": {
+                "rows": { 
+                    "for": { "in": "row" },
+                    "dataReductionAlgorithm": { "top": { "count": 100000 } }
+                },
+                "columns": { 
+                    "for": { "in": "columns" },
+                    "dataReductionAlgorithm": { "top": { "count": 100000 } }
+                },
+                "values": {
+                    "select": [
+                        { "for": { "in": "measure" } },
+                        { "for": { "in": "cellBgColor" } },
+                        { "for": { "in": "cellFontColor" } }
+                    ]
+                }
+            }
+        }
+    ],
+    "subtotals": {
+        "matrix": {
+            "rowSubtotals": {
+                "propertyIdentifier": { "objectName": "subtotal", "propertyName": "rowSubtotals" },
+                "defaultValue": true
+            },
+            "columnSubtotals": {
+                "propertyIdentifier": { "objectName": "subtotal", "propertyName": "columnSubtotals" },
+                "defaultValue": true
+            },
+            "rowSubtotalsType": {
+                "propertyIdentifier": { "objectName": "subtotal", "propertyName": "rowSubtotalsType" },
+                "defaultValue": "Bottom"
+            },
+            "rowSubtotalsPerLevel": {
+                "propertyIdentifier": { "objectName": "subtotal", "propertyName": "rowSubtotalsPerLevel" },
+                "defaultValue": true
+            },
+            "columnSubtotalsPerLevel": {
+                "propertyIdentifier": { "objectName": "subtotal", "propertyName": "columnSubtotalsPerLevel" },
+                "defaultValue": true
+            },
+            "levelSubtotalEnabled": {
+                "propertyIdentifier": { "objectName": "subtotalPerLevel", "propertyName": "levelSubtotalEnabled" },
+                "defaultValue": true
+            }
+        }
+    },
+    "privileges": []
+}

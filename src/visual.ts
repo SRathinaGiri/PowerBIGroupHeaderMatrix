@@ -1,0 +1,1781 @@
+/*
+*  Power BI Visual CLI
+*
+*  Copyright (c) Microsoft Corporation
+*  All rights reserved.
+*  MIT License
+*
+*  Permission is hereby granted, free of charge, to any person obtaining a copy
+*  of this software and associated documentation files (the ""Software""), to deal
+*  in the Software without restriction, including without limitation the rights
+*  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+*  copies of the Software, and to permit persons to whom the Software is
+*  furnished to do so, subject to the following conditions:
+*
+*  The above copyright notice and this permission notice shall be included in
+*  all copies or substantial portions of the Software.
+*
+*  THE SOFTWARE IS PROVIDED *AS IS*, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+*  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+*  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+*  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+*  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+*  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+*  THE SOFTWARE.
+*/
+"use strict";
+
+import powerbi from "powerbi-visuals-api";
+import { FormattingSettingsService } from "powerbi-visuals-utils-formattingmodel";
+import { valueFormatter } from "powerbi-visuals-utils-formattingutils";
+import "./../style/visual.less";
+
+import VisualConstructorOptions = powerbi.extensibility.visual.VisualConstructorOptions;
+import VisualUpdateOptions = powerbi.extensibility.visual.VisualUpdateOptions;
+import IVisual = powerbi.extensibility.visual.IVisual;
+
+import { VisualFormattingSettingsModel } from "./settings";
+import IVisualHost = powerbi.extensibility.visual.IVisualHost;
+
+type DataView = powerbi.DataView;
+type DataViewMatrix = powerbi.DataViewMatrix;
+type DataViewMatrixNode = powerbi.DataViewMatrixNode;
+
+type DisplayCol =
+    | { kind: "leaf"; offset: number; labels: string[]; keys: string[] }
+    | { kind: "collapsed"; start: number; end: number; labels: string[]; keys: string[]; collapsedLevel: number; key: string; subtotalOffset?: number };
+
+export class Visual implements IVisual {
+    private container: HTMLElement;
+    private toolbar: HTMLElement;
+    private contentHost: HTMLElement;
+    private debugEl: HTMLElement;
+    private debugEnabled: boolean = false;
+    private table: HTMLTableElement | null = null;
+    private formattingSettings: VisualFormattingSettingsModel;
+    private formattingSettingsService: FormattingSettingsService;
+    // Collapse/expand state
+    private collapsedRowKeys: Set<string> = new Set();
+    private collapsedColKeys: Set<string> = new Set();
+    private lastMatrix: DataViewMatrix | null = null;
+    private collapseInitialized: boolean = false;
+    // Column sizing
+    private columnWidthPx: Map<string, number> = new Map();
+    private colElsByKey: Map<string, HTMLTableColElement[]> = new Map();
+    private repeatLabels: boolean = false;
+    private rowHeaderMinWidth: number = 160;
+    private rowHeaderFontSize: number = 12;
+    private rowHeaderFontFamily: string = "";
+    private rowHeaderBold: boolean = false;
+    private colHeaderFontSize: number = 11;
+    private colHeaderFontFamily: string = "";
+    private colHeaderBold: boolean = false;
+    private compactLayout: boolean = false;
+    private measureFormats: string[] = [];
+    private displayMeasureIndices: number[] = [];
+    private cellBgColorMeasureIndices: number[] = [];
+    private cellFontColorMeasureIndices: number[] = [];
+    private measureFontColorSettings: string[] = [];
+    private measureBgColorSettings: string[] = [];
+    private gridShowHorizontal: boolean = true;
+    private gridShowVertical: boolean = true;
+    private gridThickness: number = 1;
+    private gridColor: string = "#d0d0d0";
+    private zebraEnabled: boolean = false;
+    private zebraOddColor: string = "#f7f7f7";
+    private zebraEvenColor: string = "#ffffff";
+    private zebraColEnabled: boolean = false;
+    private zebraColOddColor: string = "#f7f7f7";
+    private zebraColEvenColor: string = "#ffffff";
+    private dataFontSize: number = 11;
+    private dataFontFamily: string = "";
+    private dataBold: boolean = false;
+    private rowHeaderColor?: string;
+    private rowHeaderBg?: string;
+    private colHeaderColor?: string;
+    private colHeaderBg?: string;
+    private cellColor?: string;
+    private cellBg?: string;
+    private rowLevelStyles: Array<{fontFamily?: string; fontSize?: number; fontWeight?: string; italic?: boolean; underline?: boolean}> = [];
+    private colLevelStyles: Array<{fontFamily?: string; fontSize?: number; fontWeight?: string; italic?: boolean; underline?: boolean}> = [];
+
+    private host: IVisualHost;
+    // Totals behavior
+    private showGrandTotal: boolean = true;
+    private grandTotalFallback: boolean = false;
+    private rowSubtotalsEnabled: boolean = true;
+    private rowSubtotalPosition: "Top" | "Bottom" = "Bottom";
+    private grandTotalPosition: "Top" | "Bottom" = "Bottom";
+
+    constructor(options: VisualConstructorOptions) {
+        this.formattingSettingsService = new FormattingSettingsService();
+        this.host = options.host;
+        this.container = document.createElement("div");
+        this.container.className = "ghm-container";
+        // Toolbar
+        this.toolbar = document.createElement("div");
+        this.toolbar.className = "ghm-toolbar";
+        const btnExpand = document.createElement("button");
+        btnExpand.className = "ghm-btn";
+        btnExpand.textContent = "➕ Expand All";
+        btnExpand.addEventListener("click", () => { this.expandAll(); this.persistState(); this.refresh(); });
+        const btnCollapse = document.createElement("button");
+        btnCollapse.className = "ghm-btn";
+        btnCollapse.textContent = "➖ Collapse All";
+        btnCollapse.addEventListener("click", () => { this.collapseAll(); this.persistState(); this.refresh(); });
+        
+        const btnRowExpandLevel = document.createElement("button");
+        btnRowExpandLevel.className = "ghm-btn";
+        btnRowExpandLevel.textContent = "+𝄘";
+        btnRowExpandLevel.title = "Expand Row Level";
+        btnRowExpandLevel.addEventListener("click", () => { this.expandRowLevel(); this.persistState(); this.refresh(); });
+        // Use requested glyph-only label
+        btnRowExpandLevel.textContent = "+ 𝄘";
+        const btnRowCollapseLevel = document.createElement("button");
+        btnRowCollapseLevel.className = "ghm-btn";
+        btnRowCollapseLevel.textContent = "−𝄘";
+        btnRowCollapseLevel.title = "Collapse Row Level";
+        btnRowCollapseLevel.addEventListener("click", () => { this.collapseRowLevel(); this.persistState(); this.refresh(); });
+        btnRowCollapseLevel.textContent = "- 𝄘";
+        const btnColExpandLevel = document.createElement("button");
+        btnColExpandLevel.className = "ghm-btn";
+        btnColExpandLevel.textContent = "+⦀";
+        btnColExpandLevel.title = "Expand Column Level";
+        btnColExpandLevel.addEventListener("click", () => { this.expandColLevel(); this.persistState(); this.refresh(); });
+        btnColExpandLevel.textContent = "+ ⦀";
+        const btnColCollapseLevel = document.createElement("button");
+        btnColCollapseLevel.className = "ghm-btn";
+        btnColCollapseLevel.textContent = "−⦀";
+        btnColCollapseLevel.title = "Collapse Column Level";
+        btnColCollapseLevel.addEventListener("click", () => { this.collapseColLevel(); this.persistState(); this.refresh(); });
+        btnColCollapseLevel.textContent = "- ⦀";
+        const lblRepeat = document.createElement("label");
+        lblRepeat.style.fontSize = "12px";
+        const chkRepeat = document.createElement("input");
+        chkRepeat.type = "checkbox";
+        chkRepeat.id = "ghm-repeat";
+        chkRepeat.addEventListener("change", () => { this.repeatLabels = chkRepeat.checked; this.persistState(); this.refresh(); });
+        lblRepeat.appendChild(chkRepeat);
+        lblRepeat.appendChild(document.createTextNode(" Repeat Labels"));
+        // Compact layout toolbar toggle
+        const lblCompact = document.createElement("label");
+        lblCompact.style.fontSize = "12px";
+        const chkCompact = document.createElement("input");
+        chkCompact.type = "checkbox";
+        chkCompact.id = "ghm-compact";
+        chkCompact.addEventListener("change", () => {
+            this.compactLayout = chkCompact.checked;
+            if (this.compactLayout) {
+                this.repeatLabels = false;
+                chkRepeat.checked = false;
+                chkRepeat.disabled = true;
+            } else {
+                chkRepeat.disabled = false;
+            }
+            this.persistState();
+            this.refresh();
+        });
+        lblCompact.appendChild(chkCompact);
+        lblCompact.appendChild(document.createTextNode(" Compact"));
+        // Add buttons
+        this.toolbar.appendChild(btnExpand);
+        const btnCollapseAll = document.createElement("button");
+        btnCollapseAll.className = "ghm-btn";
+        btnCollapseAll.textContent = "- All";
+        btnCollapseAll.title = "Collapse All";
+        btnCollapseAll.addEventListener("click", () => { this.collapseAll(); this.persistState(); this.refresh(); });
+        btnExpand.textContent = "+ All";
+        btnExpand.title = "Expand All";
+        
+        this.toolbar.appendChild(btnRowExpandLevel);
+        this.toolbar.appendChild(btnRowCollapseLevel);
+        this.toolbar.appendChild(btnColExpandLevel);
+        this.toolbar.appendChild(btnColCollapseLevel);
+        this.toolbar.appendChild(btnCollapseAll);
+        this.toolbar.appendChild(lblRepeat);
+        this.toolbar.appendChild(lblCompact);
+        const btnDebug = document.createElement("button");
+        btnDebug.className = "ghm-btn";
+        btnDebug.textContent = "🧪 Debug";
+        btnDebug.addEventListener("click", () => { this.debugEnabled = !this.debugEnabled; this.updateDebugOverlay(); });
+        // Hide debug button in production
+        try { (btnDebug as any).style.display = "none"; } catch {}
+        this.toolbar.appendChild(btnDebug);
+        this.container.appendChild(this.toolbar);
+        // content host
+        this.contentHost = document.createElement("div");
+        this.container.appendChild(this.contentHost);
+        // debug overlay
+        this.debugEl = document.createElement("div");
+        this.debugEl.className = "ghm-debug";
+        this.debugEl.style.display = "none";
+        this.container.appendChild(this.debugEl);
+        options.element.appendChild(this.container);
+    }
+
+    public update(options: VisualUpdateOptions) {
+        const dataView: DataView | undefined = options.dataViews && options.dataViews[0];
+        this.formattingSettings = this.formattingSettingsService.populateFormattingSettingsModel(VisualFormattingSettingsModel, dataView);
+        // Apply sticky preference if present
+        const sticky = this.getObjectValue<boolean>(dataView?.metadata?.objects, "state", "stickyHeaders", true);
+        this.container.classList.toggle("ghm-sticky", !!sticky);
+        this.repeatLabels = this.getObjectValue<boolean>(dataView?.metadata?.objects, "state", "repeatLabels", false);
+        this.compactLayout = this.getObjectValue<boolean>(dataView?.metadata?.objects, "state", "compactLayout", false);
+        if (this.compactLayout) this.repeatLabels = false;
+        // Grand total formatting options
+        this.showGrandTotal = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "show", true);
+        this.grandTotalFallback = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "fallbackToRootValues", false);
+        this.rowSubtotalsEnabled = this.getObjectValue<boolean>(dataView?.metadata?.objects, "subtotal", "rowSubtotals", true);
+        const rowSubtotalPosRaw = this.getObjectValue<any>(dataView?.metadata?.objects, "subtotal", "rowSubtotalsType", { value: "Bottom" } as any);
+        const rowSubtotalPos = typeof rowSubtotalPosRaw === "string" ? rowSubtotalPosRaw : (rowSubtotalPosRaw && (rowSubtotalPosRaw as any).value);
+        this.rowSubtotalPosition = rowSubtotalPos === "Top" ? "Top" : "Bottom";
+        const grandTotalPosRaw = this.getObjectValue<any>(dataView?.metadata?.objects, "grandTotal", "position", { value: "Bottom" } as any);
+        const grandTotalPos = typeof grandTotalPosRaw === "string" ? grandTotalPosRaw : (grandTotalPosRaw && (grandTotalPosRaw as any).value);
+        this.grandTotalPosition = grandTotalPos === "Top" ? "Top" : "Bottom";
+        this.rowHeaderMinWidth = this.getObjectValue<number>(dataView?.metadata?.objects, "state", "rowHeaderMinWidth", 160) || 160;
+        this.rowHeaderFontSize = this.getObjectValue<number>(dataView?.metadata?.objects, "labels", "rowHeaderFontSize", 12) || 12;
+        this.rowHeaderFontFamily = this.getObjectValue<any>(dataView?.metadata?.objects, "labels", "rowHeaderFontFamily", { value: "" } as any as string) as any as string || this.getObjectValue<string>(dataView?.metadata?.objects, "labels", "rowHeaderFontFamily", "");
+        this.rowHeaderBold = this.getObjectValue<boolean>(dataView?.metadata?.objects, "labels", "rowHeaderBold", false);
+        this.colHeaderFontSize = this.getObjectValue<number>(dataView?.metadata?.objects, "labels", "colHeaderFontSize", 11) || 11;
+        this.colHeaderFontFamily = this.getObjectValue<any>(dataView?.metadata?.objects, "labels", "colHeaderFontFamily", { value: "" } as any as string) as any as string || this.getObjectValue<string>(dataView?.metadata?.objects, "labels", "colHeaderFontFamily", "");
+        this.colHeaderBold = this.getObjectValue<boolean>(dataView?.metadata?.objects, "labels", "colHeaderBold", false);
+        this.dataFontSize = this.getObjectValue<number>(dataView?.metadata?.objects, "labels", "dataFontSize", 11) || 11;
+        this.dataFontFamily = this.getObjectValue<any>(dataView?.metadata?.objects, "labels", "dataFontFamily", { value: "" } as any as string) as any as string || this.getObjectValue<string>(dataView?.metadata?.objects, "labels", "dataFontFamily", "");
+        this.dataBold = this.getObjectValue<boolean>(dataView?.metadata?.objects, "labels", "dataBold", false);
+        this.rowHeaderColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "rowHeaderColor", { value: "" } as any));
+        this.rowHeaderBg = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "rowHeaderBg", { value: "" } as any));
+        this.colHeaderColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "colHeaderColor", { value: "" } as any));
+        this.colHeaderBg = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "colHeaderBg", { value: "" } as any));
+        this.cellColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "cellColor", { value: "" } as any));
+        this.cellBg = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "cellBg", { value: "" } as any));
+        this.gridShowHorizontal = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grid", "showHorizontal", true);
+        this.gridShowVertical = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grid", "showVertical", true);
+        this.gridThickness = this.getObjectValue<number>(dataView?.metadata?.objects, "grid", "thickness", 1) || 0;
+        this.gridColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "grid", "color", { value: "#d0d0d0" } as any)) || "#d0d0d0";
+        this.zebraEnabled = this.getObjectValue<boolean>(dataView?.metadata?.objects, "zebra", "enabled", false);
+        this.zebraOddColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "zebra", "oddColor", { value: "#f7f7f7" } as any)) || "#f7f7f7";
+        this.zebraEvenColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "zebra", "evenColor", { value: "#ffffff" } as any)) || "#ffffff";
+        this.zebraColEnabled = this.getObjectValue<boolean>(dataView?.metadata?.objects, "zebraColumns", "enabled", false);
+        this.zebraColOddColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "zebraColumns", "oddColor", { value: "#f7f7f7" } as any)) || "#f7f7f7";
+        this.zebraColEvenColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "zebraColumns", "evenColor", { value: "#ffffff" } as any)) || "#ffffff";
+        // Reflect toolbar checkbox states
+        const chkRepeatEl = this.toolbar.querySelector('#ghm-repeat') as HTMLInputElement | null;
+        if (chkRepeatEl) {
+            chkRepeatEl.checked = this.repeatLabels && !this.compactLayout;
+            chkRepeatEl.disabled = !!this.compactLayout;
+        }
+        const chkCompactEl = this.toolbar.querySelector('#ghm-compact') as HTMLInputElement | null;
+        if (chkCompactEl) chkCompactEl.checked = !!this.compactLayout;
+        // Load persisted widths and collapsed sets
+        const widthsJson = this.getObjectValue<string>(dataView?.metadata?.objects, "state", "columnWidths", "");
+        if (widthsJson) {
+            try {
+                const w = JSON.parse(widthsJson) as { [k: string]: number };
+                this.columnWidthPx = new Map(Object.entries(w));
+            } catch {}
+        }
+        const colsJson = this.getObjectValue<string>(dataView?.metadata?.objects, "state", "collapsedCols", "");
+        if (colsJson) {
+            try { this.collapsedColKeys = new Set(JSON.parse(colsJson)); this.collapseInitialized = true; } catch {}
+        }
+        const rowsJson = this.getObjectValue<string>(dataView?.metadata?.objects, "state", "collapsedRows", "");
+        if (rowsJson) {
+            try { this.collapsedRowKeys = new Set(JSON.parse(rowsJson)); this.collapseInitialized = true; } catch {}
+        }
+        // If no measure is bound, force all expanded to show full structure
+        const noMeasures = !(dataView && dataView.matrix && dataView.matrix.valueSources && dataView.matrix.valueSources.length > 0);
+        if (noMeasures) {
+            this.collapsedColKeys.clear();
+            this.collapsedRowKeys.clear();
+            this.collapseInitialized = true;
+        }
+
+        // Clear only content (preserve toolbar)
+        while (this.contentHost.firstChild) this.contentHost.removeChild(this.contentHost.firstChild);
+
+        if (!dataView || !dataView.matrix) {
+            this.renderPlaceholder("Add Columns hierarchy and a measure");
+            return;
+        }
+
+        try {
+            this.lastMatrix = dataView.matrix;
+            if (!this.collapseInitialized) {
+                const mc = (this.lastMatrix.valueSources && this.lastMatrix.valueSources.length) ? this.lastMatrix.valueSources.length : 0;
+                const enableDefault = mc > 0; // don't default-collapse when no measures bound
+                this.initializeDefaultCollapsed(this.lastMatrix, enableDefault);
+                this.collapseInitialized = true;
+            }
+            this.loadLevelStyles(this.lastMatrix);
+            this.renderMatrix(dataView.matrix);
+        } catch (e) {
+            this.renderPlaceholder("Unable to render matrix");
+            console.error(e);
+        }
+    }
+
+    public getFormattingModel(): powerbi.visuals.FormattingModel {
+        return this.formattingSettingsService.buildFormattingModel(this.formattingSettings);
+    }
+
+    // Enumerates per-level subtotal toggles so the host can attach properties to individual row/column levels
+    public enumerateObjectInstances(options: powerbi.EnumerateVisualObjectInstancesOptions): powerbi.VisualObjectInstanceEnumeration {
+        const enumeration: powerbi.VisualObjectInstance[] = [];
+        if (!this.lastMatrix) return enumeration;
+
+        if (options.objectName === "subtotalPerLevel") {
+            const rows = this.lastMatrix.rows;
+            const cols = this.lastMatrix.columns;
+            // Row levels
+            if (rows && rows.levels && rows.levels.length) {
+                rows.levels.forEach((lvl, i) => {
+                    const src = lvl.sources && lvl.sources[0];
+                    if (!src) return;
+                    const displayName = src.displayName || `Row level ${i+1}`;
+                    const selector: any = src.queryName ? { metadata: src.queryName } : null;
+                    enumeration.push({
+                        objectName: options.objectName,
+                        displayName: `Row: ${displayName}`,
+                        properties: { levelSubtotalEnabled: true },
+                        selector
+                    });
+                });
+            }
+            // Column levels
+            if (cols && cols.levels && cols.levels.length) {
+                cols.levels.forEach((lvl, i) => {
+                    const src = lvl.sources && lvl.sources[0];
+                    if (!src) return;
+                    const displayName = src.displayName || `Column level ${i+1}`;
+                    const selector: any = src.queryName ? { metadata: src.queryName } : null;
+                    enumeration.push({
+                        objectName: options.objectName,
+                        displayName: `Column: ${displayName}`,
+                        properties: { levelSubtotalEnabled: true },
+                        selector
+                    });
+                });
+            }
+        }
+        if (options.objectName === "measureColors") {
+            const vsArr = (this.lastMatrix.valueSources || []) as any[];
+            vsArr.forEach((vs, i) => {
+                const roles = (vs as any).roles || {};
+                if (!roles.measure) return;
+                const displayName = (vs as any).displayName || (vs as any).queryName || `Measure ${i + 1}`;
+                const selector: any = (vs as any).queryName ? { metadata: (vs as any).queryName } : null;
+                const obj = (vs as any).objects || {};
+                const font = this.parseColor(obj.measureColors && (obj.measureColors as any).cellFontColor) || "";
+                const bg = this.parseColor(obj.measureColors && (obj.measureColors as any).cellBgColor) || "";
+                enumeration.push({
+                    objectName: options.objectName,
+                    displayName,
+                    properties: {
+                        cellFontColor: font,
+                        cellBgColor: bg
+                    },
+                    selector
+                });
+            });
+        }
+        return enumeration;
+    }
+
+    private renderPlaceholder(text: string) {
+        const el = document.createElement("div");
+        el.className = "ghm-placeholder";
+        el.textContent = text;
+        this.contentHost.appendChild(el);
+    }
+
+    private renderMatrix(matrix: DataViewMatrix) {
+        const columns = matrix.columns;
+        const rows = matrix.rows;
+
+        if (!columns || !columns.root || !columns.root.children || columns.root.children.length === 0) {
+            this.renderPlaceholder("No column hierarchy provided");
+            return;
+        }
+
+        const table = document.createElement("table");
+        table.className = "ghm-table";
+        table.style.borderCollapse = "collapse";
+        // Apply a global font if only one family provided
+        if (this.rowHeaderFontFamily && !this.colHeaderFontFamily) table.style.fontFamily = this.rowHeaderFontFamily;
+        if (this.colHeaderFontFamily && !this.rowHeaderFontFamily) table.style.fontFamily = this.colHeaderFontFamily;
+        const colgroup = document.createElement("colgroup");
+        const thead = document.createElement("thead");
+        const tbody = document.createElement("tbody");
+
+        // Determine columns to display (compress collapsed groups to a single column)
+        const colDepth = this.getColumnDepth(columns);
+        const displayCols = this.computeDisplayColumns(columns.root, colDepth);
+        // Build column header rows from the display list
+        const headerRows = this.buildHeaderRowsFromDisplay(displayCols, colDepth);
+
+        // Measures handling: compute display measures vs style measures
+        const totalMeasureCount = (matrix.valueSources && matrix.valueSources.length) ? matrix.valueSources.length : 0;
+        this.displayMeasureIndices = [];
+        this.cellBgColorMeasureIndices = [];
+        this.cellFontColorMeasureIndices = [];
+        this.measureFontColorSettings = [];
+        this.measureBgColorSettings = [];
+        const vsArr = matrix.valueSources || [];
+        for (let i = 0; i < vsArr.length; i++) {
+            const roles: any = (vsArr[i] as any).roles || {};
+            if (roles.measure) this.displayMeasureIndices.push(i);
+            if (roles.cellBgColor) this.cellBgColorMeasureIndices.push(i);
+            if (roles.cellFontColor) this.cellFontColorMeasureIndices.push(i);
+            const objects = (vsArr[i] as any).objects || {};
+            this.measureFontColorSettings[i] = this.parseColor(objects.measureColors && (objects.measureColors as any).cellFontColor) || "";
+            this.measureBgColorSettings[i] = this.parseColor(objects.measureColors && (objects.measureColors as any).cellBgColor) || "";
+        }
+        if (!this.displayMeasureIndices.length && vsArr.length) {
+            // Default to all non-style measures if the role is missing
+            this.displayMeasureIndices = vsArr
+                .map((_, idx) => idx)
+                .filter(idx => {
+                    const roles: any = (vsArr[idx] as any).roles || {};
+                    return roles.measure || (!roles.cellBgColor && !roles.cellFontColor);
+                });
+            if (!this.displayMeasureIndices.length) {
+                this.displayMeasureIndices = vsArr.map((_, idx) => idx);
+            }
+        }
+        const columnsHaveLevels = !!(columns.levels && columns.levels.length);
+        const measuresOnColumns = !!(columns.levels && columns.levels.length && columns.levels[0].sources && columns.levels[0].sources.some((s: any) => s && (s as any).isMeasure));
+        // If measures are already on the column axis, skip multiplying by measureCount
+        const displayMeasureCount = measuresOnColumns ? 1 : Math.max(1, this.displayMeasureIndices.length);
+        const resolveMeasureIndex = (ref: DisplayCol, displayIdx: number): number => {
+            if (measuresOnColumns) {
+                if (ref.kind === "leaf") return ref.offset;
+                const coll: any = ref as any;
+                if (coll.subtotalOffset !== undefined) return coll.subtotalOffset;
+                if (coll.start !== undefined) return coll.start;
+                return displayIdx;
+            }
+            return this.displayMeasureIndices[displayIdx] ?? displayIdx;
+        };
+        const measureLabels = measuresOnColumns
+            ? displayCols.map((c, idx) => c.labels[c.labels.length - 1] || `Measure ${idx + 1}`)
+            : this.displayMeasureIndices.map((i, idx) => String((vsArr[i] as any).displayName || (vsArr[i] as any).queryName || `Measure ${idx + 1}`));
+        this.measureFormats = (vsArr || []).map(m => String((m as any).format || ""));
+        const totalCountForKeys = Math.max(1, totalMeasureCount);
+        if (columnsHaveLevels && displayMeasureCount > 1) {
+            for (const row of headerRows) {
+                for (const cell of row) cell.span = (cell.span || 1) * displayMeasureCount;
+            }
+        }
+
+        // Determine number of row header levels (depth)
+        const rowDepth = this.getRowDepth(rows);
+        // Hide deeper row header columns when levels are collapsed, even in Repeat Labels mode
+        const visibleRowDepth = this.getVisibleRowDepth(this.lastMatrix?.rows, rowDepth);
+        const rowHeaderCols = (rowDepth > 0) ? (this.compactLayout ? 1 : visibleRowDepth) : 0;
+        // Include the thin resizer row as part of the sticky header block
+        const headerDepth = headerRows.length + (displayMeasureCount > 1 ? 1 : 0) + 1;
+
+        headerRows.forEach((rowCells, i) => {
+            const tr = document.createElement("tr");
+            if (i === 0 && rowHeaderCols > 0) {
+                const corner = document.createElement("th");
+                corner.className = "ghm-corner";
+                corner.rowSpan = headerDepth;
+                if (rowHeaderCols > 1) corner.colSpan = rowHeaderCols;
+                this.applyGridBorder(corner, true);
+                tr.appendChild(corner);
+            }
+            for (const cell of rowCells) {
+                const th = document.createElement("th");
+                th.className = "ghm-colheader";
+                th.title = cell.label;
+                // Toggle indicator and label
+                if (cell.togglable) {
+                    const toggle = document.createElement("span");
+                    toggle.className = "ghm-toggle";
+                    toggle.textContent = cell.collapsed ? "+" : "−";
+                    toggle.addEventListener("click", (ev) => {
+                        ev.stopPropagation();
+                        if (cell.collapsed) this.collapsedColKeys.delete(cell.key);
+                        else this.collapsedColKeys.add(cell.key);
+                        this.persistState();
+                        this.refresh();
+                    });
+                    th.appendChild(toggle);
+                }
+                const txt = document.createElement("span");
+                txt.textContent = cell.label;
+                const ch = this.colLevelStyles[i] || {};
+                const fs = ch.fontSize ?? this.colHeaderFontSize; if (fs) txt.style.fontSize = `${fs}px`;
+                txt.style.fontFamily = (ch.fontFamily || this.colHeaderFontFamily) || "";
+                if (this.colHeaderBold || ch.fontWeight) txt.style.fontWeight = (ch.fontWeight || "bold");
+                if (ch.italic) txt.style.fontStyle = "italic";
+                if (ch.underline) txt.style.textDecoration = "underline";
+                if (this.colHeaderColor) th.style.color = this.colHeaderColor;
+                if (this.colHeaderBg) th.style.backgroundColor = this.colHeaderBg;
+                this.applyGridBorder(th, true);
+                th.appendChild(txt);
+                if (cell.span && cell.span > 1) th.colSpan = cell.span;
+                tr.appendChild(th);
+            }
+            thead.appendChild(tr);
+        });
+
+        if (displayMeasureCount > 1) {
+            const tr = document.createElement("tr");
+            for (const ref of displayCols) {
+                for (let m = 0; m < displayMeasureCount; m++) {
+                    const th = document.createElement("th");
+                    th.className = "ghm-colheader";
+                    th.textContent = measureLabels[m] ?? `M${m + 1}`;
+                    if (this.colHeaderColor) th.style.color = this.colHeaderColor;
+                    if (this.colHeaderBg) th.style.backgroundColor = this.colHeaderBg;
+                    this.applyGridBorder(th, true);
+                    tr.appendChild(th);
+                }
+            }
+            thead.appendChild(tr);
+        }
+
+        // Resizer row (always present so handles align with columns)
+        const resizerRow = document.createElement("tr");
+        resizerRow.className = "ghm-resizers-row";
+        // Prepend row-header placeholders so cell count matches total columns
+        for (let r = 0; r < rowHeaderCols; r++) {
+            const th = document.createElement("th");
+            th.className = "ghm-resizer-cell";
+            resizerRow.appendChild(th);
+        }
+        const resizerRefs = displayCols;
+        for (const ref of resizerRefs) {
+            for (let m = 0; m < displayMeasureCount; m++) {
+                const th = document.createElement("th");
+                th.className = "ghm-resizer-cell";
+                const key = (ref.kind === "leaf") ? ref.keys.join("||") : ref.key;
+                const handle = document.createElement("div");
+                handle.className = "ghm-resizer";
+                handle.title = "Drag to resize column";
+                handle.addEventListener("mousedown", (e) => this.beginResize(e as MouseEvent, key));
+                th.appendChild(handle);
+                this.applyGridBorder(th, true);
+                resizerRow.appendChild(th);
+            }
+        }
+        thead.appendChild(resizerRow);
+
+        // Determine column leaf count (for cell generation) and order
+        const columnLeaves = displayCols;
+
+        // Build colgroup to control widths (reserve all row-header columns; hide non-visible with width=0)
+        this.colElsByKey.clear();
+        for (let r = 0; r < rowHeaderCols; r++) {
+            const col = document.createElement("col");
+            if (!this.compactLayout && r < visibleRowDepth) col.style.width = (r === 0 ? `${this.rowHeaderMinWidth}px` : "120px");
+            else if (this.compactLayout && r === 0) col.style.width = `${this.rowHeaderMinWidth}px`;
+            else col.style.width = "0px";
+            colgroup.appendChild(col);
+        }
+        for (const ref of columnLeaves) {
+            const key = (ref.kind === "leaf") ? ref.keys.join("||") : ref.key;
+            const width = this.columnWidthPx.get(key) ?? 120;
+            for (let m = 0; m < displayMeasureCount; m++) {
+                const col = document.createElement("col");
+                col.style.width = `${width}px`;
+                colgroup.appendChild(col);
+                if (!this.colElsByKey.has(key)) this.colElsByKey.set(key, []);
+                this.colElsByKey.get(key)!.push(col);
+            }
+        }
+
+        const colLeafCount = columnLeaves.length;
+
+        // Do not inject a separate "Grand Total" row here.
+        // Body rows (including the root grand total when applicable) are generated
+        // exclusively by collectOutlineRowsWithTotals() below. This avoids any
+        // chance of duplicating the total row.
+
+        // Build body rows
+        if (rows && rows.root && rows.root.children && rows.root.children.length) {
+            const outlineRows = this.collectOutlineRowsWithTotals(rows.root, rowDepth);
+            // Drop any empty-label total rows (synthetic duplicates) and deduplicate Grand Total if needed
+            const prunedRows = outlineRows.filter(r => {
+                const lbls = (r as any).labels as string[] | undefined;
+                const isGT = (r as any).isTotal && lbls && lbls[0] === "Grand Total";
+                const allEmpty = !isGT && (r as any).isTotal && (!lbls || lbls.every(l => !l));
+                return !allEmpty;
+            });
+            const gtRows: typeof prunedRows = [];
+            const otherRows: typeof prunedRows = [];
+            for (const r of prunedRows) {
+                const isGT = (r as any).isTotal && r.labels && r.labels[0] === "Grand Total";
+                if (isGT) gtRows.push(r); else otherRows.push(r);
+            }
+            const gt = gtRows.length ? [gtRows[0]] : [];
+        const filteredRows = (this.grandTotalPosition === "Top")
+            ? gt.concat(otherRows)
+            : otherRows.concat(gt);
+        const lastShownRowLabels: Array<string | null> = new Array(rowDepth).fill(null);
+        let bodyRowIndex = 0;
+            for (const rowInfoRaw of filteredRows) {
+                // When Repeat Labels is off, keep only the leaf label visible
+                // (the last populated level) for non-total rows.
+                const rowInfo = { ...rowInfoRaw } as any;
+                // Precompute row-level style from style measures, if present
+                const valuesMapForRow = (rowInfo as any).valuesMap || {} as any;
+                const rowMeasureBg = this.getRowMeasureBg(valuesMapForRow as any, totalCountForKeys);
+                let labelsToUse: string[] = rowInfo.labels as string[];
+                if (!this.compactLayout && !this.repeatLabels && !rowInfo.isTotal && this.rowSubtotalsEnabled) {
+                    if (this.rowSubtotalPosition === "Bottom") {
+                        // Show each higher-level label once per group when totals are at the bottom
+                        const newLabels = new Array(rowDepth).fill("");
+                        for (let lvl = 0; lvl < rowDepth; lvl++) {
+                            const lbl = (rowInfo.labels && rowInfo.labels[lvl]) ? rowInfo.labels[lvl] : "";
+                            if (!lbl) { newLabels[lvl] = ""; continue; }
+                            if (lastShownRowLabels[lvl] === lbl) {
+                                newLabels[lvl] = "";
+                            } else {
+                                newLabels[lvl] = lbl;
+                                lastShownRowLabels[lvl] = lbl;
+                                for (let deeper = lvl + 1; deeper < rowDepth; deeper++) lastShownRowLabels[deeper] = null;
+                            }
+                        }
+                        labelsToUse = newLabels;
+                    } else {
+                        const newLabels = new Array(rowDepth).fill("");
+                        let lastIdx = -1;
+                        for (let i = rowDepth - 1; i >= 0; i--) { if (rowInfo.labels && rowInfo.labels[i]) { lastIdx = i; break; } }
+                        if (lastIdx >= 0) newLabels[lastIdx] = rowInfo.labels[lastIdx];
+                        labelsToUse = newLabels;
+                    }
+            }
+            if (rowInfo.isTotal) {
+                // Reset tracking so the next group's first row shows its labels
+                for (let i = 0; i < lastShownRowLabels.length; i++) lastShownRowLabels[i] = null;
+            }
+            const tr = document.createElement("tr");
+                if ((rowInfo as any).isTotal) tr.className = "ghm-totalrow";
+                if (this.zebraEnabled && !rowInfo.isTotal) {
+                    const zebraColor = (bodyRowIndex % 2 === 0) ? this.zebraEvenColor : this.zebraOddColor;
+                    if (!rowMeasureBg && zebraColor) tr.style.backgroundColor = zebraColor;
+                }
+                const rowStyleBg = rowMeasureBg || this.rowHeaderBg || "";
+                const rowStyleColor = this.rowHeaderColor || "";
+            if (rowHeaderCols > 0) {
+                if (this.compactLayout) {
+                    const th = document.createElement("th");
+                    th.className = "ghm-rowheader";
+                    // deepest available label
+                    let txt = "";
+                    let lastIdx = -1;
+                    for (let i = rowDepth - 1; i >= 0; i--) { if (labelsToUse && labelsToUse[i]) { txt = labelsToUse[i]; lastIdx = i; break; } }
+                    th.textContent = txt || "";
+                this.applyRowHeaderStyle(th, 0);
+                if (rowStyleBg) th.style.backgroundColor = rowStyleBg;
+                if (rowStyleColor) th.style.color = rowStyleColor;
+                this.applyGridBorder(th, true);
+                    // Indentation according to depth in compact layout
+                    const depthIndent = (rowInfo as any).isTotal && (rowInfo as any).depth !== undefined
+                        ? Math.max(0, Math.min(rowDepth - 1, (rowInfo as any).depth))
+                        : Math.max(0, lastIdx);
+                    const basePad = 8, step = 14;
+                        th.style.paddingLeft = `${basePad + step * depthIndent}px`;
+                        if ((rowInfo as any).isTotal && (rowInfo as any).toggleKey) {
+                            const toggle = document.createElement("span");
+                            toggle.className = "ghm-toggle";
+                            const collapsed = !!(rowInfo as any).collapsed;
+                            toggle.textContent = collapsed ? "+" : "-";
+                            toggle.title = collapsed ? "Expand group" : "Collapse group";
+                            (toggle as any).style.marginRight = "6px";
+                            toggle.addEventListener("click", (ev) => {
+                                ev.stopPropagation();
+                                const key = String((rowInfo as any).toggleKey);
+                                if (collapsed) this.collapsedRowKeys.delete(key); else this.collapsedRowKeys.add(key);
+                            this.persistState();
+                            this.refresh();
+                        });
+                        th.prepend(toggle);
+                    }
+                    if (this.rowHeaderBg) th.style.backgroundColor = this.rowHeaderBg;
+                    tr.appendChild(th);
+                } else {
+                    const toggleLevel = Math.max(0, Math.min(rowHeaderCols - 1, (rowInfo as any).depth ?? 0));
+                    for (let lvl = 0; lvl < rowHeaderCols; lvl++) {
+                        const th = document.createElement("th");
+                        th.className = "ghm-rowheader";
+                        th.textContent = (labelsToUse && labelsToUse[lvl]) || "";
+                        this.applyRowHeaderStyle(th, lvl);
+                        if (rowStyleBg) th.style.backgroundColor = rowStyleBg;
+                        if (rowStyleColor) th.style.color = rowStyleColor;
+                        if (this.rowHeaderBg) th.style.backgroundColor = this.rowHeaderBg;
+                        this.applyGridBorder(th, true);
+                            // Place +/- toggle on the appropriate visible level
+                            if ((rowInfo as any).isTotal && (rowInfo as any).toggleKey && lvl === toggleLevel) {
+                                const toggle = document.createElement("span");
+                                toggle.className = "ghm-toggle";
+                                const collapsed = !!(rowInfo as any).collapsed;
+                                toggle.textContent = collapsed ? "+" : "-";
+                                toggle.title = collapsed ? "Expand group" : "Collapse group";
+                                toggle.addEventListener("click", (ev) => {
+                                    ev.stopPropagation();
+                                    const key = String((rowInfo as any).toggleKey);
+                                    if (collapsed) this.collapsedRowKeys.delete(key); else this.collapsedRowKeys.add(key);
+                                    this.persistState();
+                                    this.refresh();
+                                });
+                                th.prepend(toggle);
+                            }
+                            tr.appendChild(th);
+                        }
+                    }
+                }
+                const valuesMap = (rowInfo as any).valuesMap || {} as any;
+                const numericKeys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a,b)=>a-b);
+                for (let c = 0; c < colLeafCount; c++) {
+                    for (let m = 0; m < displayMeasureCount; m++) {
+                        const globalM = resolveMeasureIndex(columnLeaves[c], m);
+                    const td = document.createElement("td");
+                    const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], globalM, totalCountForKeys);
+                    td.textContent = this.formatValueByMeasure(v, globalM);
+                    this.applyCellConditionalStyle(td, valuesMap as any, columnLeaves[c], globalM, totalCountForKeys);
+                    if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
+                    if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
+                    if (this.dataBold) td.style.fontWeight = "bold";
+                    if (this.cellColor) td.style.color = this.cellColor;
+                    let baseBg = "";
+                    if (this.zebraColEnabled) {
+                        const colIdx = c * displayMeasureCount + m;
+                        baseBg = (colIdx % 2 === 0) ? this.zebraColEvenColor : this.zebraColOddColor;
+                    }
+                    if (!baseBg && this.cellBg) baseBg = this.cellBg;
+                    if (baseBg) td.style.backgroundColor = baseBg;
+                    this.applyGridBorder(td, false);
+                    tr.appendChild(td);
+                }
+            }
+            tbody.appendChild(tr);
+                bodyRowIndex++;
+            }
+        } else {
+            // No row groups - single total row
+            const tr = document.createElement("tr");
+            // Data cells
+            const valuesMap = rows && rows.root ? rows.root.values || {} : {};
+            const numericKeys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a, b) => a - b);
+            for (let c = 0; c < colLeafCount; c++) {
+                for (let m = 0; m < displayMeasureCount; m++) {
+                    const globalM = resolveMeasureIndex(columnLeaves[c], m);
+                    const td = document.createElement("td");
+                    const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], globalM, totalCountForKeys);
+                    td.textContent = this.formatValueByMeasure(v, globalM);
+                    this.applyCellConditionalStyle(td, valuesMap as any, columnLeaves[c], globalM, totalCountForKeys);
+                    if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
+                    if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
+                    if (this.dataBold) td.style.fontWeight = "bold";
+                    if (this.cellColor) td.style.color = this.cellColor;
+                    // Base background: zebra columns or global cellBg
+                    let baseBg = "";
+                    if (this.zebraColEnabled) {
+                        const colIdx = c * displayMeasureCount + m;
+                        baseBg = (colIdx % 2 === 0) ? this.zebraColEvenColor : this.zebraColOddColor;
+                    }
+                    if (!baseBg && this.cellBg) baseBg = this.cellBg;
+                    if (baseBg) td.style.backgroundColor = baseBg;
+                    this.applyGridBorder(td, false);
+                    tr.appendChild(td);
+                }
+            }
+            tbody.appendChild(tr);
+        }
+
+        table.appendChild(colgroup);
+        table.appendChild(thead);
+        table.appendChild(tbody);
+        this.contentHost.appendChild(table);
+        this.applyStickyOffsets(thead);
+        this.updateDebugOverlay({ table, headerRows, measureCount: displayMeasureCount, columnLeaves, rowDepth, colDepth });
+    }
+
+    private computeDisplayColumns(root: DataViewMatrixNode, depth: number): DisplayCol[] {
+        type Leaf = { offset: number; labels: string[]; keys: string[]; collapsedAt: number | null };
+        const leaves: Leaf[] = [];
+        const ranges = new Map<string, { start: number; end: number; level: number }>();
+        const subtotalOffsetByKey = new Map<string, number>();
+        let offset = 0;
+        const walk = (node: DataViewMatrixNode, labels: string[], keys: string[], parentKey: string, underSubtotal: boolean) => {
+            const label = this.nodeLabel(node);
+            const key = [...keys, label].filter(Boolean).join("||");
+            const newLabels = [...labels, label];
+            const newKeys = [...keys, label];
+            const isSubtotal = (node as any).isSubtotal === true;
+            if (!node.children || node.children.length === 0) {
+                // Detect subtotal leaf: record parent group key -> offset
+                if (underSubtotal || isSubtotal) {
+                    if (parentKey) subtotalOffsetByKey.set(parentKey, offset);
+                }
+                let collapsedAt: number | null = null;
+                for (let i = 0; i < newLabels.length; i++) {
+                    const k = newKeys.slice(0, i + 1).filter(Boolean).join("||");
+                    if (this.collapsedColKeys.has(k)) { collapsedAt = i; break; }
+                }
+                while (newLabels.length < depth) newLabels.push("");
+                while (newKeys.length < depth) newKeys.push(newKeys[newKeys.length - 1] || "");
+                leaves.push({ offset, labels: newLabels, keys: newKeys, collapsedAt });
+                if (collapsedAt !== null) {
+                    const gkey = newKeys.slice(0, collapsedAt + 1).filter(Boolean).join("||");
+                    const r = ranges.get(gkey);
+                    if (!r) ranges.set(gkey, { start: offset, end: offset, level: collapsedAt });
+                    else r.end = offset;
+                }
+                offset++;
+                return;
+            }
+            for (const ch of node.children) {
+                const chLabel = this.nodeLabel(ch);
+                const chKey = [...newKeys, chLabel].filter(Boolean).join("||");
+                walk(ch, newLabels, newKeys, key, underSubtotal || isSubtotal);
+            }
+        };
+        if (root.children) for (const ch of root.children) walk(ch, [], [], "", false);
+
+        const result: DisplayCol[] = [];
+        let i = 0;
+        while (i < leaves.length) {
+            const leaf = leaves[i];
+            if (leaf.collapsedAt !== null) {
+                const gkey = leaf.keys.slice(0, leaf.collapsedAt + 1).filter(Boolean).join("||");
+                const r = ranges.get(gkey)!;
+                const subtotalOffset = subtotalOffsetByKey.get(gkey);
+                result.push({ kind: "collapsed", start: r.start, end: r.end, labels: leaf.labels, keys: leaf.keys, collapsedLevel: r.level, key: gkey, subtotalOffset });
+                i = r.end + 1;
+            } else {
+                result.push({ kind: "leaf", offset: leaf.offset, labels: leaf.labels, keys: leaf.keys });
+                i++;
+            }
+        }
+        return result;
+    }
+
+    private isAnyAncestorCollapsed(path: string[]): boolean {
+        // path is array of labels up to, but not including, the leaf
+        let accum: string[] = [];
+        for (const p of path) {
+            accum.push(p);
+            const k = accum.join("||");
+            if (this.collapsedColKeys.has(k)) return true;
+        }
+        return false;
+    }
+
+    private getRowDepth(rows?: powerbi.DataViewHierarchy): number {
+        if (!rows || !rows.root) return 0;
+        if (rows.levels && rows.levels.length) return rows.levels.length;
+        const depthFrom = (node: DataViewMatrixNode): number => {
+            if (!node.children || node.children.length === 0) return 0;
+            let max = 0;
+            for (const c of node.children) max = Math.max(max, depthFrom(c));
+            return 1 + max;
+        };
+        if (!rows.root.children || rows.root.children.length === 0) return 0;
+        return depthFrom(rows.root);
+    }
+
+    private getColumnDepth(columns?: powerbi.DataViewHierarchy): number {
+        if (!columns || !columns.root) return 0;
+        if (columns.levels && columns.levels.length) return columns.levels.length;
+        const depthFrom = (node: DataViewMatrixNode): number => {
+            if (!node.children || node.children.length === 0) return 1;
+            let max = 0;
+            for (const c of node.children) max = Math.max(max, depthFrom(c));
+            return 1 + max;
+        };
+        if (!columns.root.children || columns.root.children.length === 0) return 1;
+        return depthFrom(columns.root);
+    }
+
+    private renderRowGroup(node: DataViewMatrixNode, depth: number, parentKey: string, columnLeaves: DisplayCol[], measureCount: number, totalMeasureCount: number, resolveMeasureIndex: (ref: DisplayCol, displayIdx: number) => number): HTMLTableRowElement[] {
+        // Skip the artificial root and render its children
+        if (node.level === undefined && node.children && node.children.length) {
+            let all: HTMLTableRowElement[] = [];
+            for (const child of node.children) {
+                all = all.concat(this.renderRowGroup(child, 0, parentKey, columnLeaves, measureCount, totalMeasureCount, resolveMeasureIndex));
+            }
+            return all;
+        }
+
+        if (node.children && node.children.length) {
+            let rows: HTMLTableRowElement[] = [];
+            const label = this.nodeLabel(node) || "Total";
+            const thisKey = [parentKey, label].filter(Boolean).join("||");
+            const collapsed = this.collapsedRowKeys.has(thisKey);
+            if (collapsed) {
+                // Render a single group row with group aggregates
+                const tr = document.createElement("tr");
+                const th = document.createElement("th");
+                th.className = "ghm-rowheader";
+                th.title = label;
+                const toggle = document.createElement("span");
+                toggle.className = "ghm-toggle";
+                toggle.textContent = "+";
+                toggle.addEventListener("click", (ev) => {
+                    ev.stopPropagation();
+                    this.collapsedRowKeys.delete(thisKey);
+                    this.persistState();
+                    this.refresh();
+                });
+                th.appendChild(toggle);
+                const txt = document.createElement("span");
+                txt.textContent = label;
+                if (this.rowHeaderFontSize) txt.style.fontSize = `${this.rowHeaderFontSize}px`;
+                if (this.rowHeaderFontFamily) txt.style.fontFamily = this.rowHeaderFontFamily;
+                th.appendChild(txt);
+                tr.appendChild(th);
+                // fill remaining row header columns (collapsed depths)
+                const visDepth = this.repeatLabels ? this.getRowDepth(this.lastMatrix?.rows) : this.getDisplayedRowDepth(this.lastMatrix?.rows);
+                    for (let k = 1; k < visDepth; k++) {
+                        const thFill = document.createElement("th");
+                        thFill.className = "ghm-rowheader";
+                        this.applyRowHeaderStyle(thFill, k);
+                        tr.appendChild(thFill);
+                    }
+                const totalCountLocal = (this.lastMatrix?.valueSources?.length) || totalMeasureCount || measureCount || 1;
+                for (let c = 0; c < columnLeaves.length; c++) {
+                    for (let m = 0; m < measureCount; m++) {
+                        const globalM = resolveMeasureIndex(columnLeaves[c], m);
+                        const td = document.createElement("td");
+                        const v = this.getCollapsedRowGroupValue(node, columnLeaves[c], globalM, totalCountLocal);
+                        td.textContent = this.formatValueByMeasure(v, globalM);
+                        const valuesMapNode = (node.values || {}) as any;
+                        this.applyCellConditionalStyle(td, valuesMapNode, columnLeaves[c], globalM, totalCountLocal);
+                        if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
+                        if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
+                        if (this.dataBold) td.style.fontWeight = "bold";
+                        if (this.cellColor) td.style.color = this.cellColor;
+                        if (this.cellBg) td.style.backgroundColor = this.cellBg;
+                        tr.appendChild(td);
+                    }
+                }
+                return [tr];
+            } else {
+                const normalChildren = node.children.filter(ch => !(ch as any).isSubtotal);
+                const subtotalChild = node.children.find(ch => (ch as any).isSubtotal);
+                for (const child of normalChildren) {
+                    rows = rows.concat(this.renderRowGroup(child, depth + 1, thisKey, columnLeaves, measureCount, totalMeasureCount, resolveMeasureIndex));
+                }
+                if (subtotalChild) {
+                    const totalDepth = this.getRowDepth(this.lastMatrix?.rows);
+                    const trTotal = document.createElement("tr");
+                    trTotal.className = "ghm-totalrow";
+                    // Do not emit TH at current group depth since the row-spanning group header occupies that column across this block
+                    for (let i = 0; i < totalDepth; i++) {
+                        if (i === depth) continue;
+                        const thFill = document.createElement("th");
+                        thFill.className = "ghm-rowheader";
+                        this.applyRowHeaderStyle(thFill, i);
+                        trTotal.appendChild(thFill);
+                    }
+                    const valuesMap = (subtotalChild.values || {}) as any;
+                    const totalCountLocal2 = (this.lastMatrix?.valueSources?.length) || totalMeasureCount || measureCount || 1;
+                    for (let c = 0; c < columnLeaves.length; c++) {
+                        for (let m = 0; m < measureCount; m++) {
+                            const globalM = resolveMeasureIndex(columnLeaves[c], m);
+                            const td = document.createElement("td");
+                            td.textContent = this.formatValueByMeasure(this.getValueFromMapForDisplayCol(valuesMap, columnLeaves[c], globalM, totalCountLocal2), globalM);
+                            this.applyCellConditionalStyle(td, valuesMap as any, columnLeaves[c], globalM, totalCountLocal2);
+                            if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
+                            if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
+                            if (this.dataBold) td.style.fontWeight = "bold";
+                            if (this.cellColor) td.style.color = this.cellColor;
+                            if (this.cellBg) td.style.backgroundColor = this.cellBg;
+                            trTotal.appendChild(td);
+                        }
+                    }
+                    // Place subtotal row at the top of the group's block so totals are shown first
+                    rows.unshift(trTotal);
+                }
+                if (rows.length > 0) {
+                    const th = document.createElement("th");
+                    th.className = "ghm-rowheader";
+                    th.title = label;
+                    const toggle = document.createElement("span");
+                    toggle.className = "ghm-toggle";
+                    toggle.textContent = "−";
+                    toggle.addEventListener("click", (ev) => {
+                        ev.stopPropagation();
+                        this.collapsedRowKeys.add(thisKey);
+                        this.persistState();
+                        this.refresh();
+                    });
+                    th.appendChild(toggle);
+                    const txt = document.createElement("span");
+                    txt.textContent = label;
+                    this.applyRowHeaderStyle(txt, depth);
+                    th.appendChild(txt);
+                    th.rowSpan = rows.length;
+                    // Ensure the first row in the group has TH placeholders up to the target depth
+                    const totalDepth = this.getRowDepth(this.lastMatrix?.rows);
+                    let headerCells = Array.from(rows[0].querySelectorAll('th')) as HTMLElement[];
+                    // If there are fewer than 'depth' header cells, prepend blanks until we can insert at the correct index
+                    while (headerCells.length < Math.min(depth, totalDepth)) {
+                        const pad = document.createElement("th");
+                        pad.className = "ghm-rowheader";
+                        this.applyRowHeaderStyle(pad, headerCells.length);
+                        rows[0].insertBefore(pad, headerCells[0] || null);
+                        headerCells = Array.from(rows[0].querySelectorAll('th')) as HTMLElement[];
+                    }
+                    const targetIndex = Math.min(depth, headerCells.length);
+                    const refNode = headerCells[targetIndex] || null;
+                    rows[0].insertBefore(th, refNode);
+                }
+                return rows;
+            }
+        }
+
+        // Leaf row: create a row, add deepest-level header, then data cells
+        const tr = document.createElement("tr");
+            const th = document.createElement("th");
+            th.className = "ghm-rowheader";
+            th.textContent = this.nodeLabel(node) || "";
+            th.rowSpan = 1;
+            this.applyRowHeaderStyle(th, depth);
+            tr.appendChild(th);
+
+        // Add placeholder THs for any deeper hidden levels to keep column alignment (total columns = rowDepth)
+        const totalDepth = this.getRowDepth(this.lastMatrix?.rows);
+        for (let d = depth + 1; d < totalDepth; d++) {
+            const ph = document.createElement("th");
+            ph.className = "ghm-rowheader";
+            this.applyRowHeaderStyle(ph, d);
+            tr.appendChild(ph);
+        }
+
+        const valuesMap = node.values || {};
+        const numericKeys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a, b) => a - b);
+        for (let c = 0; c < columnLeaves.length; c++) {
+            for (let m = 0; m < measureCount; m++) {
+                const td = document.createElement("td");
+                const globalM = resolveMeasureIndex(columnLeaves[c], m);
+                const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], globalM, totalMeasureCount || 1);
+                td.textContent = this.formatValueByMeasure(v, globalM);
+                tr.appendChild(td);
+            }
+        }
+        return [tr];
+    }
+
+    private refresh() {
+        // Re-render using the last received matrix
+        while (this.contentHost.firstChild) this.contentHost.removeChild(this.contentHost.firstChild);
+        if (this.lastMatrix) this.renderMatrix(this.lastMatrix);
+    }
+
+    private applyStickyOffsets(thead: HTMLTableSectionElement) {
+        if (!this.container.classList.contains("ghm-sticky")) return;
+
+        const compute = () => {
+            const rows = Array.from(thead.rows);
+            // If first row has no height yet, try again on next frame
+            const firstH = rows[0] ? (rows[0].offsetHeight || rows[0].getBoundingClientRect().height) : 0;
+            if (!firstH) {
+                requestAnimationFrame(compute);
+                return;
+            }
+            let top = 0;
+            for (const tr of rows) {
+                const h = tr.offsetHeight || tr.getBoundingClientRect().height || 0;
+                const cells = Array.from(tr.cells) as HTMLElement[];
+                for (const cell of cells) (cell as HTMLElement).style.top = `${top}px`;
+                top += h;
+            }
+        };
+        requestAnimationFrame(compute);
+        window.addEventListener("resize", () => requestAnimationFrame(compute), { once: true });
+    }
+
+    private persistState() {
+        const widthsObj: any = {};
+        for (const [k, v] of this.columnWidthPx.entries()) widthsObj[k] = v;
+        this.host.persistProperties({
+            merge: [
+                {
+                    objectName: "state",
+                    properties: {
+                        columnWidths: JSON.stringify(widthsObj),
+                        collapsedCols: JSON.stringify(Array.from(this.collapsedColKeys)),
+                        collapsedRows: JSON.stringify(Array.from(this.collapsedRowKeys)),
+                        repeatLabels: this.repeatLabels,
+                        compactLayout: this.compactLayout
+                    },
+                    selector: null
+                }
+            ]
+        });
+    }
+
+    private getObjectValue<T>(objects: powerbi.DataViewObjects | undefined, objectName: string, propertyName: string, defaultValue: T): T {
+        const obj = objects && (objects as any)[objectName];
+        const v = obj && obj[propertyName];
+        return (v !== undefined) ? (v as T) : defaultValue;
+    }
+
+    private parseColor(input: any): string {
+        if (input == null) return "";
+        if (typeof input === "string") return input;
+        const maybeVal = (input as any).value;
+        if (typeof maybeVal === "string") return maybeVal;
+        const solid = (input as any).solid;
+        if (solid && typeof solid.color === "string") return solid.color;
+        return "";
+    }
+
+
+    private getValueFromMapForDisplayCol(valuesMap: { [key: number]: powerbi.DataViewMatrixNodeValue }, ref: DisplayCol, measureIndex: number, totalMeasureCount: number): any {
+        if (ref.kind === "leaf") {
+            const key = ref.offset * totalMeasureCount + measureIndex;
+            const cell = valuesMap[key];
+            return cell && cell.value != null ? cell.value : "";
+        } else {
+            // Strict host-only: for collapsed columns, render a value only when
+            // the host emitted a dedicated subtotal leaf for that column group.
+            const coll = ref as any as { subtotalOffset?: number };
+            if (coll.subtotalOffset !== undefined) {
+                const key = (coll.subtotalOffset as number) * totalMeasureCount + measureIndex;
+                const cell = valuesMap[key];
+                return (cell && cell.value != null) ? cell.value : "";
+            }
+            return "";
+        }
+    }
+
+    private applyCellConditionalStyle(td: HTMLTableCellElement, valuesMap: { [key:number]: powerbi.DataViewMatrixNodeValue }, ref: DisplayCol, measureIndex: number, totalMeasureCount: number) {
+        let key: number | null = null;
+        if (ref.kind === 'leaf') key = ref.offset * totalMeasureCount + measureIndex;
+        else {
+            const coll = ref as any as { subtotalOffset?: number };
+            if (coll.subtotalOffset !== undefined) key = (coll.subtotalOffset as number) * totalMeasureCount + measureIndex;
+        }
+        if (key == null) return;
+        const cell = valuesMap[key];
+        const obj = cell && (cell.objects as any);
+        const colorsObj = obj && (obj.colors as any);
+        const explicitFont = colorsObj && (colorsObj.cellColor as any);
+        const explicitBg = colorsObj && (colorsObj.cellBg as any);
+        const font = explicitFont && ((explicitFont as any).solid?.color || (explicitFont as any).value);
+        const bg = explicitBg && ((explicitBg as any).solid?.color || (explicitBg as any).value);
+
+        // Measure-driven colors (per value)
+        const tryMeasureColor = (mi: number): string | null => {
+            if (mi < 0) return null;
+            if (ref.kind === "leaf") {
+                const colorKey = ref.offset * totalMeasureCount + mi;
+                const c = (valuesMap as any)[colorKey];
+                if (c && c.value != null) return String(c.value);
+            } else {
+                const coll = ref as any as { subtotalOffset?: number };
+                if (coll.subtotalOffset !== undefined) {
+                    const colorKey = (coll.subtotalOffset as number) * totalMeasureCount + mi;
+                    const c = (valuesMap as any)[colorKey];
+                    if (c && c.value != null) return String(c.value);
+                }
+            }
+            return null;
+        };
+        const selectColorIndex = (arr: number[]): number => {
+            if (!arr.length) return -1;
+            const displayPos = this.displayMeasureIndices.indexOf(measureIndex);
+            if (displayPos >= 0 && displayPos < arr.length) return arr[displayPos];
+            return arr[arr.length - 1];
+        };
+        const measureBg = tryMeasureColor(selectColorIndex(this.cellBgColorMeasureIndices));
+        const measureFont = tryMeasureColor(selectColorIndex(this.cellFontColorMeasureIndices));
+        const measureDefaultFont = this.measureFontColorSettings[measureIndex] || "";
+        const measureDefaultBg = this.measureBgColorSettings[measureIndex] || "";
+
+        if (measureFont) (td as any).style.color = measureFont;
+        if (measureBg) (td as any).style.backgroundColor = measureBg;
+        if (!measureFont && font) (td as any).style.color = font;
+        if (!measureBg && bg) (td as any).style.backgroundColor = bg;
+        if (!measureFont && !font && measureDefaultFont) (td as any).style.color = measureDefaultFont;
+        if (!measureBg && !bg && measureDefaultBg) (td as any).style.backgroundColor = measureDefaultBg;
+    }
+
+    private getRowMeasureBg(valuesMap: { [key:number]: powerbi.DataViewMatrixNodeValue }, totalMeasureCount: number): string | null {
+        if (!this.cellBgColorMeasureIndices.length || totalMeasureCount <= 0) return null;
+        const bgIndex = this.cellBgColorMeasureIndices[0];
+        const keys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k));
+        for (const k of keys) {
+            if ((k % totalMeasureCount) === bgIndex) {
+                const c = (valuesMap as any)[k];
+                if (c && c.value != null) return String(c.value);
+            }
+        }
+        return null;
+    }
+
+    private updateDebugOverlay(_ctx?: { table: HTMLTableElement; headerRows: Array<any>; measureCount: number; columnLeaves: DisplayCol[]; rowDepth: number; colDepth: number }) { /* debug disabled */ return; }
+
+    private loadLevelStyles(matrix: DataViewMatrix) {
+        this.rowLevelStyles = [];
+        this.colLevelStyles = [];
+        const rows = matrix.rows; const cols = matrix.columns;
+        if (rows && rows.levels) {
+            rows.levels.forEach((lvl, i) => {
+                const src = lvl.sources && lvl.sources[0];
+                const obj = (src && (src as any).objects && (src as any).objects.labelStylePerLevel) || {};
+                this.rowLevelStyles[i] = {
+                    fontFamily: obj.fontFamily,
+                    fontSize: obj.fontSize,
+                    fontWeight: obj.fontWeight,
+                    italic: obj.italic,
+                    underline: obj.underline
+                };
+            });
+        }
+        if (cols && cols.levels) {
+            cols.levels.forEach((lvl, i) => {
+                const src = lvl.sources && lvl.sources[0];
+                const obj = (src && (src as any).objects && (src as any).objects.labelStylePerLevel) || {};
+                this.colLevelStyles[i] = {
+                    fontFamily: obj.fontFamily,
+                    fontSize: obj.fontSize,
+                    fontWeight: obj.fontWeight,
+                    italic: obj.italic,
+                    underline: obj.underline
+                };
+            });
+        }
+    }
+
+    private computeRowInfo(rows: powerbi.DataViewHierarchy | undefined, rowDepth: number): { count: number } {
+        if (!rows || !rows.root) return { count: 0 };
+        if (this.repeatLabels) {
+            const flat = this.collectDisplayRowsRepeat(rows.root, rowDepth);
+            return { count: flat.length };
+        }
+        const countFrom = (node: DataViewMatrixNode, parentKey: string): number => {
+            if (node.level === undefined && node.children && node.children.length) {
+                let total = 0; for (const ch of node.children) total += countFrom(ch, ''); return total;
+            }
+            const label = this.nodeLabel(node);
+            const key = [parentKey, label].filter(Boolean).join('||');
+            if (node.children && node.children.length) {
+                if (this.collapsedRowKeys.has(key)) return 1;
+                let total = 0; for (const ch of node.children) total += countFrom(ch, key); return total;
+            }
+            return 1;
+        };
+        return { count: countFrom(rows.root, '') };
+    }
+
+    private getCollapsedRowGroupValue(node: DataViewMatrixNode, ref: DisplayCol, measureIndex: number, measureCount: number): any {
+        // Prefer host-provided row subtotal on the collapsed node itself
+        const tryFromNodeValues = (): any => {
+            const valuesMap = (node.values || {}) as any;
+            if (ref.kind === "leaf") {
+                const key = ref.offset * measureCount + measureIndex;
+                const cell = valuesMap[key];
+                if (cell && cell.value != null) return cell.value;
+                return undefined;
+            } else {
+                // Strict host-only for collapsed column groups: require a dedicated subtotal leaf
+                const coll = ref as any as { subtotalOffset?: number };
+                if (coll.subtotalOffset !== undefined) {
+                    const key = (coll.subtotalOffset as number) * measureCount + measureIndex;
+                    const cell = valuesMap[key];
+                    if (cell && cell.value != null) return cell.value;
+                }
+                return undefined;
+            }
+        };
+
+        const direct = tryFromNodeValues();
+        if (direct !== undefined) return direct;
+        // Try subtotal child provided by host (isSubtotal)
+        const subtotal = this.findSubtotalChild(node);
+        if (subtotal) {
+            const map = (subtotal.values || {}) as any;
+            if (ref.kind === "leaf") {
+                const key = ref.offset * measureCount + measureIndex;
+                const cell = map[key];
+                if (cell && cell.value != null) return cell.value;
+            } else {
+                const coll = ref as any as { subtotalOffset?: number };
+                if (coll.subtotalOffset !== undefined) {
+                    const key = (coll.subtotalOffset as number) * measureCount + measureIndex;
+                    const cell = map[key];
+                    if (cell && cell.value != null) return cell.value;
+                }
+            }
+        }
+        // Otherwise leave empty by design
+        return "";
+    }
+
+    private findSubtotalChild(node: DataViewMatrixNode): DataViewMatrixNode | null {
+        if (!node || !node.children) return null;
+        for (const ch of node.children) {
+            if ((ch as any).isSubtotal) return ch;
+        }
+        return null;
+    }
+
+    private aggregateAcrossRowLeaves(node: DataViewMatrixNode, ref: DisplayCol, measureIndex: number, measureCount: number): { sum: number | null; first: any } {
+        let sum: number | null = null;
+        let first: any = null;
+        const visit = (n: DataViewMatrixNode) => {
+            if (!n.children || n.children.length === 0) {
+                const valuesMap = (n.values || {}) as any;
+                if (ref.kind === "leaf") {
+                    const key = ref.offset * measureCount + measureIndex;
+                    const cell = valuesMap[key];
+                    if (cell && cell.value != null) {
+                        if (typeof cell.value === "number") sum = (sum ?? 0) + (cell.value as number);
+                        else if (first === null) first = cell.value;
+                    }
+                } else {
+                    for (let off = ref.start; off <= ref.end; off++) {
+                        const key = off * measureCount + measureIndex;
+                        const cell = valuesMap[key];
+                        if (cell && cell.value != null) {
+                            if (typeof cell.value === "number") sum = (sum ?? 0) + (cell.value as number);
+                            else if (first === null) first = cell.value;
+                        }
+                    }
+                }
+                return;
+            }
+            for (const ch of n.children) visit(ch);
+        };
+        visit(node);
+        return { sum, first };
+    }
+
+    private getVisibleRowDepth(rows: powerbi.DataViewHierarchy | undefined, maxDepth: number): number {
+        if (!rows || !rows.root) return maxDepth;
+        const depthFrom = (node: DataViewMatrixNode, depth: number, parentKey: string): number => {
+            const label = this.nodeLabel(node);
+            const key = [parentKey, label].filter(Boolean).join("||");
+            if (!node.children || node.children.length === 0) return depth + 1;
+            if (this.collapsedRowKeys.has(key)) return depth + 1;
+            let max = depth + 1;
+            for (const ch of node.children) max = Math.max(max, depthFrom(ch, depth + 1, key));
+            return max;
+        };
+        if (!rows.root.children || rows.root.children.length === 0) return 1;
+        let m = 1; for (const ch of rows.root.children) m = Math.max(m, depthFrom(ch, 0, ""));
+        return Math.min(maxDepth, m);
+    }
+
+    private applyRowHeaderStyle(th: HTMLElement, level?: number) {
+        const style = (level !== undefined && this.rowLevelStyles[level]) ? this.rowLevelStyles[level] : {};
+        const fs = style.fontSize ?? this.rowHeaderFontSize; if (fs) th.style.fontSize = `${fs}px`;
+        th.style.fontFamily = (style.fontFamily || this.rowHeaderFontFamily) || "";
+        if (this.rowHeaderBold || style.fontWeight) th.style.fontWeight = style.fontWeight || "bold";
+        if (style.italic) th.style.fontStyle = "italic";
+        if (style.underline) th.style.textDecoration = "underline";
+        if (this.rowHeaderColor) th.style.color = this.rowHeaderColor;
+    }
+
+    private applyGridBorder(el: HTMLElement, isHeader: boolean) {
+        const thick = Math.max(0, this.gridThickness || 0);
+        if (!thick) return;
+        const color = this.gridColor || "#d0d0d0";
+        const horiz = this.gridShowHorizontal;
+        const vert = this.gridShowVertical;
+        if (horiz) {
+            el.style.borderTop = `${thick}px solid ${color}`;
+            el.style.borderBottom = `${thick}px solid ${color}`;
+        }
+        if (vert) {
+            el.style.borderLeft = `${thick}px solid ${color}`;
+            el.style.borderRight = `${thick}px solid ${color}`;
+        }
+        // Ensure borders collapse visually
+        (el as any).style.borderCollapse = "collapse";
+    }
+
+    private getDisplayedRowDepth(rows?: powerbi.DataViewHierarchy): number {
+        if (!rows || !rows.root || !rows.root.children) return 1;
+        const depthFrom = (node: DataViewMatrixNode, depth: number, parentKey: string): number => {
+            const label = this.nodeLabel(node);
+            const key = [parentKey, label].filter(Boolean).join("||");
+            if (this.collapsedRowKeys.has(key)) return depth + 1;
+            if (!node.children || node.children.length === 0) return depth + 1;
+            let max = depth + 1;
+            for (const ch of node.children) max = Math.max(max, depthFrom(ch, depth + 1, key));
+            return max;
+        };
+        let m = 1; for (const ch of rows.root.children) m = Math.max(m, depthFrom(ch, 0, ""));
+        return m;
+    }
+
+    private getDisplayedColDepth(cols?: powerbi.DataViewHierarchy): number {
+        if (!cols || !cols.root || !cols.root.children) return 1;
+        const depthFrom = (node: DataViewMatrixNode, depth: number, path: string[]): number => {
+            const label = this.nodeLabel(node);
+            const key = [...path, label].filter(Boolean).join("||");
+            if (this.collapsedColKeys.has(key)) return depth + 1;
+            if (!node.children || node.children.length === 0) return depth + 1;
+            let max = depth + 1;
+            for (const ch of node.children) max = Math.max(max, depthFrom(ch, depth + 1, [...path, label]));
+            return max;
+        };
+        let m = 1; for (const ch of cols.root.children) m = Math.max(m, depthFrom(ch, 0, []));
+        return m;
+    }
+
+    private collapseAll() {
+        if (this.lastMatrix?.columns?.root?.children) {
+            const add = (node: DataViewMatrixNode, path: string[]) => {
+                const label = this.nodeLabel(node);
+                const key = [...path, label].filter(Boolean).join("||");
+                if (node.children && node.children.length) {
+                    if (key) this.collapsedColKeys.add(key);
+                    for (const ch of node.children) add(ch, [...path, label]);
+                }
+            };
+            for (const ch of this.lastMatrix.columns.root.children) add(ch, []);
+        }
+        if (this.lastMatrix?.rows?.root?.children) {
+            const add = (node: DataViewMatrixNode, path: string[]) => {
+                const label = this.nodeLabel(node);
+                const key = [...path, label].filter(Boolean).join("||");
+                if (node.children && node.children.length) {
+                    if (key) this.collapsedRowKeys.add(key);
+                    for (const ch of node.children) add(ch, [...path, label]);
+                }
+            };
+            for (const ch of this.lastMatrix.rows.root.children) add(ch, []);
+        }
+    }
+
+    private expandAll() {
+        this.collapsedColKeys.clear();
+        this.collapsedRowKeys.clear();
+    }
+
+    private collectDisplayRowsRepeat(node: DataViewMatrixNode, rowDepth: number, parentLabels: string[] = [], parentKey: string = ""): Array<{ labels: string[]; valuesMap?: { [key: number]: powerbi.DataViewMatrixNodeValue }; numericKeys?: number[] }> {
+        const rows: Array<{ labels: string[]; valuesMap?: { [key: number]: powerbi.DataViewMatrixNodeValue }; numericKeys?: number[] }> = [];
+        const label = this.nodeLabel(node);
+        const thisKey = [parentKey, label].filter(Boolean).join("||");
+        const labels = label ? [...parentLabels, label] : [...parentLabels];
+        if (node.level === undefined && node.children && node.children.length) {
+            for (const ch of node.children) rows.push(...this.collectDisplayRowsRepeat(ch, rowDepth, labels, thisKey));
+            return rows;
+        }
+        if (node.children && node.children.length) {
+            if (this.collapsedRowKeys.has(thisKey)) {
+                const padded = [...labels]; while (padded.length < rowDepth) padded.push("");
+                // Strict host-only subtotal for collapsed groups
+                const subtotalChild = (node.children as any[]).find(ch => (ch as any).isSubtotal);
+                const map = subtotalChild ? (subtotalChild.values as any) : {};
+                const numericKeys = Object.keys(map as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a, b) => a - b);
+                rows.push({ labels: padded, valuesMap: map, numericKeys });
+                return rows;
+            }
+            for (const ch of node.children) rows.push(...this.collectDisplayRowsRepeat(ch, rowDepth, labels, thisKey));
+            return rows;
+        }
+        const padded = [...labels]; while (padded.length < rowDepth) padded.push("");
+        const valuesMap = node.values || {};
+        const numericKeys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a, b) => a - b);
+        rows.push({ labels: padded, valuesMap: valuesMap as any, numericKeys });
+        return rows;
+    }
+
+    private collectOutlineRowsWithTotals(root: DataViewMatrixNode, rowDepth: number): Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean }> {
+        const rows: Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean }> = [];
+        const grandTotalRows: Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean }> = [];
+        const tryRootTotal = () => {
+            if (!this.showGrandTotal) return;
+            const subtotalChild = root.children && (root.children as any[]).find(ch => (ch as any).isSubtotal);
+            if (subtotalChild && subtotalChild.values) {
+                const map = subtotalChild.values as any;
+                const labels = new Array(rowDepth).fill("");
+                labels[0] = "Grand Total";
+                grandTotalRows.push({ labels, valuesMap: map, isTotal: true });
+                return;
+            }
+            if (this.grandTotalFallback && root.values) {
+                const map = root.values as any;
+                const labels = new Array(rowDepth).fill("");
+                labels[0] = "Grand Total";
+                grandTotalRows.push({ labels, valuesMap: map, isTotal: true });
+            }
+        };
+        tryRootTotal();
+
+        const traverse = (node: DataViewMatrixNode, depth: number, path: string[], keyPath: string[]) => {
+            const label = this.nodeLabel(node);
+            const hasChildren = !!(node.children && node.children.length);
+            const subtotalChild = hasChildren ? (node.children as any[]).find(ch => (ch as any).isSubtotal) : null;
+            const hasGroupValues = hasChildren && node.values && Object.keys(node.values as any).length > 0;
+            const map = subtotalChild ? (subtotalChild.values as any) : (hasGroupValues ? (node.values as any) : null);
+            const gKey = [...keyPath, label].filter(Boolean).join("||");
+            const isCollapsed = gKey && this.collapsedRowKeys.has(gKey);
+            // Skip emitting a pseudo subtotal for the synthetic root; Grand Total handles that case.
+            const isRootNode = depth === 0 && (!label || label === "") && keyPath.length === 0;
+            const includeSubtotal = !isRootNode && (this.rowSubtotalsEnabled || isCollapsed) && hasChildren && map && depth < rowDepth;
+            const subtotalAtBottom = this.rowSubtotalPosition === "Bottom";
+            const pushSubtotalRow = (collapsedFlag: boolean) => {
+                const labels = new Array(rowDepth).fill("");
+                for (let i = 0; i < path.length; i++) labels[i] = path[i];
+                labels[depth] = collapsedFlag ? label : `${label} Total`;
+                rows.push({ labels, valuesMap: map!, isTotal: true, toggleKey: gKey || undefined, depth, collapsed: collapsedFlag });
+            };
+            if (includeSubtotal && (!subtotalAtBottom || isCollapsed)) {
+                pushSubtotalRow(!!isCollapsed);
+                if (isCollapsed) return;
+            }
+            if (hasChildren) {
+                for (const ch of node.children) {
+                    if ((ch as any).isSubtotal) continue;
+                    const chLabel = this.nodeLabel(ch);
+                    // build next path correctly: fill parent positions, put current node's label at its depth
+                    const nextPath = new Array(rowDepth).fill("");
+                    for (let i = 0; i < path.length; i++) nextPath[i] = path[i];
+                    nextPath[depth] = label;
+                    traverse(ch, depth + 1, nextPath.slice(0, depth + 1), [...keyPath, label]);
+                }
+                if (includeSubtotal && subtotalAtBottom) pushSubtotalRow(false);
+                return;
+            }
+            // leaf
+            const labels = new Array(rowDepth).fill("");
+            for (let i = 0; i < path.length; i++) labels[i] = path[i];
+            labels[depth] = label;
+            rows.push({ labels, valuesMap: node.values as any, isTotal: false });
+        };
+        if (root.children) {
+            for (const ch of root.children) traverse(ch, 0, [], []);
+        }
+        if (this.grandTotalPosition === "Top") return grandTotalRows.concat(rows);
+        return rows.concat(grandTotalRows);
+    }
+
+    // Level-wise expand/collapse helpers
+    private collapseRowLevel() {
+        if (!this.lastMatrix?.rows?.root?.children) return;
+        const currentDepth = this.getDisplayedRowDepth(this.lastMatrix.rows);
+        if (currentDepth <= 1) return;
+        const targetDepth = currentDepth - 1; // collapse one level globally
+        const addKeysAtDepth = (node: DataViewMatrixNode, depth: number, path: string[]) => {
+            const label = this.nodeLabel(node);
+            const key = [...path, label].filter(Boolean).join("||");
+            if (!node.children || node.children.length === 0) return;
+            if (depth === targetDepth) {
+                if (!this.collapsedRowKeys.has(key)) this.collapsedRowKeys.add(key);
+                return;
+            }
+            for (const ch of node.children) addKeysAtDepth(ch, depth + 1, [...path, label]);
+        };
+        for (const ch of this.lastMatrix.rows.root.children) addKeysAtDepth(ch, 1, []);
+    }
+
+    private expandRowLevel() {
+        if (this.collapsedRowKeys.size === 0) return;
+        let minDepth = Number.MAX_SAFE_INTEGER;
+        for (const key of this.collapsedRowKeys) {
+            const depth = key ? key.split("||").length : 1;
+            if (depth < minDepth) minDepth = depth;
+        }
+        for (const key of Array.from(this.collapsedRowKeys)) {
+            const depth = key ? key.split("||").length : 1;
+            if (depth === minDepth) this.collapsedRowKeys.delete(key);
+        }
+    }
+
+    private collapseColLevel() {
+        if (!this.lastMatrix?.columns?.root?.children) return;
+        const current = this.getDisplayedColDepth(this.lastMatrix.columns);
+        if (current <= 1) return;
+        const target = current - 1;
+        const addAtDepth = (node: DataViewMatrixNode, depth: number, path: string[]) => {
+            if (!node.children || node.children.length === 0) return;
+            const label = this.nodeLabel(node);
+            const key = [...path, label].filter(Boolean).join("||");
+            if (depth === target) {
+                if (!this.collapsedColKeys.has(key)) this.collapsedColKeys.add(key);
+                return;
+            }
+            for (const ch of node.children) addAtDepth(ch, depth + 1, [...path, label]);
+        };
+        for (const ch of this.lastMatrix.columns.root.children) addAtDepth(ch, 1, []);
+    }
+
+    private expandColLevel() {
+        if (this.collapsedColKeys.size === 0) return;
+        let minDepth = Number.MAX_SAFE_INTEGER;
+        for (const key of this.collapsedColKeys) {
+            const depth = key ? key.split("||").length : 1;
+            if (depth < minDepth) minDepth = depth;
+        }
+        for (const key of Array.from(this.collapsedColKeys)) {
+            const depth = key ? key.split("||").length : 1;
+            if (depth === minDepth) this.collapsedColKeys.delete(key);
+        }
+    }
+
+    private initializeDefaultCollapsed(matrix: DataViewMatrix, enableCollapse: boolean = true) {
+        if (!enableCollapse) return;
+        // Collapse all column groups by default
+        if (matrix.columns && matrix.columns.root) {
+            const addColKeys = (node: DataViewMatrixNode, path: string[]) => {
+                const label = this.nodeLabel(node);
+                const key = [...path, label].filter(Boolean).join("||");
+                if (node.children && node.children.length) {
+                    if (key) this.collapsedColKeys.add(key);
+                    for (const ch of node.children) addColKeys(ch, [...path, label]);
+                }
+            };
+            if (matrix.columns.root.children) {
+                for (const ch of matrix.columns.root.children) addColKeys(ch, []);
+            }
+        }
+
+        // Collapse all row groups by default
+        if (matrix.rows && matrix.rows.root) {
+            const addRowKeys = (node: DataViewMatrixNode, path: string[]) => {
+                const label = this.nodeLabel(node);
+                const key = [...path, label].filter(Boolean).join("||");
+                if (node.children && node.children.length) {
+                    if (key) this.collapsedRowKeys.add(key);
+                    for (const ch of node.children) addRowKeys(ch, [...path, label]);
+                }
+            };
+            if (matrix.rows.root.children) {
+                for (const ch of matrix.rows.root.children) addRowKeys(ch, []);
+            }
+        }
+    }
+
+    // no custom aggregation: collapsed groups show blank cells to avoid misrepresenting measure semantics
+
+    private buildHeaderRowsFromDisplay(displayCols: DisplayCol[], depth: number): Array<Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean }>> {
+        const rows: Array<Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean }>> = [];
+        for (let level = 0; level < depth; level++) {
+            const row: Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean }> = [];
+            let i = 0;
+            while (i < displayCols.length) {
+                const col = displayCols[i];
+                const label = col.kind === "leaf" ? col.labels[level] : (level < col.collapsedLevel ? col.labels[level] : (level === col.collapsedLevel ? col.labels[level] : ""));
+                const key = col.keys[level] || "";
+                const collapsed = col.kind === "collapsed" && level === col.collapsedLevel ? true : this.collapsedColKeys.has(key) && level < depth - 1;
+                // Avoid showing a bare +/- toggle with no label when an upper level
+                // header is collapsed. Only show toggles when the label is visible.
+                const togglable = !!key && level < depth - 1 && !!label;
+                let span = 1;
+                let j = i + 1;
+                while (j < displayCols.length) {
+                    const nxt = displayCols[j];
+                    const nLabel = nxt.kind === "leaf" ? nxt.labels[level] : (level < (nxt.collapsedLevel ?? 0) ? nxt.labels[level] : (level === (nxt.collapsedLevel ?? -1) ? nxt.labels[level] : ""));
+                    const nKey = nxt.keys[level] || "";
+                    const nCollapsed = nxt.kind === "collapsed" && level === (nxt.collapsedLevel ?? -1) ? true : this.collapsedColKeys.has(nKey) && level < depth - 1;
+                    if (nLabel !== label || nKey !== key || nCollapsed !== collapsed) break;
+                    span++; j++;
+                }
+                row.push({ label, span, key, togglable, collapsed });
+                i = j;
+            }
+            // If a full header row yields no labels at all (e.g., due to a higher
+            // level being collapsed), drop the row entirely to avoid an empty
+            // header line containing only +/- icons or blanks.
+            const hasAnyLabel = row.some(c => !!(c.label && c.label.trim().length > 0));
+            if (hasAnyLabel) rows.push(row);
+        }
+        return rows;
+    }
+
+    private beginResize(e: MouseEvent, key: string) {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = this.columnWidthPx.get(key) ?? 120;
+        const onMove = (ev: MouseEvent) => {
+            const delta = ev.clientX - startX;
+            const newW = Math.max(40, startWidth + delta);
+            this.columnWidthPx.set(key, newW);
+            const cols = this.colElsByKey.get(key) || [];
+            for (const c of cols) c.style.width = `${newW}px`;
+        };
+        const onUp = () => {
+            window.removeEventListener("mousemove", onMove);
+            window.removeEventListener("mouseup", onUp);
+            this.persistState();
+        };
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+    }
+
+    private getCellValueForDisplayCol(valuesMap: { [key: number]: powerbi.DataViewMatrixNodeValue }, numericKeys: number[], ref: DisplayCol, measureIndex: number, totalMeasureCount: number): any {
+        if (ref.kind === "leaf") {
+            const prefKey = ref.offset * totalMeasureCount + measureIndex;
+            const preferredCell = valuesMap[prefKey];
+            if (preferredCell && preferredCell.value != null) return preferredCell.value;
+            if (numericKeys.length) {
+                const idx = ref.offset * totalMeasureCount + measureIndex;
+                const altKey = numericKeys[idx] ?? numericKeys[idx % numericKeys.length];
+                const altCell = valuesMap[altKey];
+                if (altCell && altCell.value != null) return altCell.value;
+            }
+            return "";
+        } else {
+            // Strict host-only for collapsed columns: show value only if host supplied a dedicated
+            // subtotal leaf for this column group (subtotalOffset). Otherwise blank.
+            const coll = ref as any as { subtotalOffset?: number };
+            if (coll.subtotalOffset !== undefined) {
+                const key = (coll.subtotalOffset as number) * totalMeasureCount + measureIndex;
+                const cell = valuesMap[key];
+                return (cell && cell.value != null) ? cell.value : "";
+            }
+            return "";
+        }
+    }
+
+    private collectLeaves(node: DataViewMatrixNode, out: DataViewMatrixNode[]) {
+        if (!node.children || node.children.length === 0) {
+            out.push(node);
+            return;
+        }
+        for (const child of node.children) this.collectLeaves(child, out);
+    }
+
+    private collectRowLeaves(node: DataViewMatrixNode, path: string[], out: Array<{ node: DataViewMatrixNode; label: string }>) {
+        const label = this.nodeLabel(node);
+        const nextPath = label ? [...path, label] : [...path];
+        if (!node.children || node.children.length === 0) {
+            out.push({ node, label: nextPath.join(" / ") || "Total" });
+            return;
+        }
+        for (const child of node.children) this.collectRowLeaves(child, nextPath, out);
+    }
+
+    private countLeaves(node: DataViewMatrixNode): number {
+        if (!node.children || node.children.length === 0) return 1;
+        let n = 0;
+        for (const child of node.children) n += this.countLeaves(child);
+        return n;
+    }
+
+    private nodeLabel(node: DataViewMatrixNode): string {
+        if (node.levelValues && node.levelValues.length) {
+            // Prefer levelValues for matrix nodes
+            return String(node.levelValues.map(v => v.value).filter(v => v != null)[0] ?? "");
+        }
+        if (node.value != null) return String(node.value);
+        return "";
+    }
+
+    private formatValue(v: any): string {
+        if (v == null) return "";
+        if (typeof v === "number") return v.toLocaleString();
+        return String(v);
+    }
+
+    private formatValueByMeasure(v: any, measureIndex: number): string {
+        if (v == null || v === "") return "";
+        const fmt = (this.measureFormats && this.measureFormats[measureIndex]) ? this.measureFormats[measureIndex] : undefined;
+        try {
+            const f = valueFormatter.create({ format: fmt });
+            return f.format(v);
+        } catch { return String(v); }
+    }
+}

@@ -1,0 +1,17 @@
+{
+		"version": "1.0.0.0",
+		"author": {"name":"Subbiah Rathinagiri","email":"srathinagiri@gmail.com"},
+		"resources": [
+			{
+				"resourceId": "rId0",
+				"sourceType": 5,
+				"file": "resources/groupheadermatrix64C4DB2EE5494BE8B6487493E1F58BB0.pbiviz.json"
+			}
+		],
+		"visual": {"name":"groupheadermatrix","displayName":"groupheadermatrix","guid":"groupheadermatrix64C4DB2EE5494BE8B6487493E1F58BB0","visualClassName":"Visual","version":"1.0.0.0","description":"Grouped Header Matrix","supportUrl":"https://www.rathinagiri.in","gitHubUrl":""},
+		"metadata": {
+			"pbivizjson": {
+				"resourceId": "rId0"
+			}
+		}
+	}

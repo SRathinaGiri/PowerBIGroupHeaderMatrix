@@ -1,0 +1,1079 @@
+   1 /*
+   2 *  Power BI Visual CLI
+   3 *
+   4 *  Copyright (c) Microsoft Corporation
+   5 *  All rights reserved.
+   6 *  MIT License
+   7 *
+   8 *  Permission is hereby granted, free of charge, to any person obtaining a copy
+   9 *  of this software and associated documentation files (the ""Software""), to deal
+  10 *  in the Software without restriction, including without limitation the rights
+  11 *  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  12 *  copies of the Software, and to permit persons to whom the Software is
+  13 *  furnished to do so, subject to the following conditions:
+  14 *
+  15 *  The above copyright notice and this permission notice shall be included in
+  16 *  all copies or substantial portions of the Software.
+  17 *
+  18 *  THE SOFTWARE IS PROVIDED *AS IS*, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  19 *  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  20 *  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  21 *  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  22 *  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  23 *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+  24 *  THE SOFTWARE.
+  25 */
+  26 "use strict";
+  27 
+  28 import powerbi from "powerbi-visuals-api";
+  29 import { FormattingSettingsService } from "powerbi-visuals-utils-formattingmodel";
+  30 import "./../style/visual.less";
+  31 
+  32 import VisualConstructorOptions = powerbi.extensibility.visual.VisualConstructorOptions;
+  33 import VisualUpdateOptions = powerbi.extensibility.visual.VisualUpdateOptions;
+  34 import IVisual = powerbi.extensibility.visual.IVisual;
+  35 
+  36 import { VisualFormattingSettingsModel } from "./settings";
+  37 import IVisualHost = powerbi.extensibility.visual.IVisualHost;
+  38 
+  39 type DataView = powerbi.DataView;
+  40 type DataViewMatrix = powerbi.DataViewMatrix;
+  41 type DataViewMatrixNode = powerbi.DataViewMatrixNode;
+  42 
+  43 type DisplayCol =
+  44     | { kind: "leaf"; offset: number; labels: string[]; keys: string[] }
+  45     | { kind: "collapsed"; start: number; end: number; labels: string[]; keys: string[]; collapsedLevel: number; key: string };
+  46 
+  47 export class Visual implements IVisual {
+  48     private container: HTMLElement;
+  49     private toolbar: HTMLElement;
+  50     private contentHost: HTMLElement;
+  51     private debugEl: HTMLElement;
+  52     private debugEnabled: boolean = false;
+  53     private table: HTMLTableElement | null = null;
+  54     private formattingSettings: VisualFormattingSettingsModel;
+  55     private formattingSettingsService: FormattingSettingsService;
+  56     // Collapse/expand state
+  57     private collapsedRowKeys: Set<string> = new Set();
+  58     private collapsedColKeys: Set<string> = new Set();
+  59     private lastMatrix: DataViewMatrix | null = null;
+  60     private collapseInitialized: boolean = false;
+  61     // Column sizing
+  62     private columnWidthPx: Map<string, number> = new Map();
+  63     private colElsByKey: Map<string, HTMLTableColElement[]> = new Map();
+  64     private repeatLabels: boolean = false;
+  65     private rowHeaderMinWidth: number = 160;
+  66     private rowHeaderFontSize: number = 12;
+  67     private rowHeaderFontFamily: string = "";
+  68     private colHeaderFontSize: number = 11;
+  69     private colHeaderFontFamily: string = "";
+  70 
+  71     private host: IVisualHost;
+  72 
+  73     constructor(options: VisualConstructorOptions) {
+  74         this.formattingSettingsService = new FormattingSettingsService();
+  75         this.host = options.host;
+  76         this.container = document.createElement("div");
+  77         this.container.className = "ghm-container";
+  78         // Toolbar
+  79         this.toolbar = document.createElement("div");
+  80         this.toolbar.className = "ghm-toolbar";
+  81         const btnExpand = document.createElement("button");
+  82         btnExpand.className = "ghm-btn";
+  83         btnExpand.textContent = "➕ Expand All";
+  84         btnExpand.addEventListener("click", () => { this.expandAll(); this.persistState(); this.refresh(); });
+  85         const btnCollapse = document.createElement("button");
+  86         btnCollapse.className = "ghm-btn";
+  87         btnCollapse.textContent = "➖ Collapse All";
+  88         btnCollapse.addEventListener("click", () => { this.collapseAll(); this.persistState(); this.refresh(); });
+  89         
+  90         const btnRowExpandLevel = document.createElement("button");
+  91         btnRowExpandLevel.className = "ghm-btn";
+  92         btnRowExpandLevel.textContent = "+𝄘";
+  93         btnRowExpandLevel.title = "Expand Row Level";
+  94         btnRowExpandLevel.addEventListener("click", () => { this.expandRowLevel(); this.persistState(); this.refresh(); });
+  95         const btnRowCollapseLevel = document.createElement("button");
+  96         btnRowCollapseLevel.className = "ghm-btn";
+  97         btnRowCollapseLevel.textContent = "−𝄘";
+  98         btnRowCollapseLevel.title = "Collapse Row Level";
+  99         btnRowCollapseLevel.addEventListener("click", () => { this.collapseRowLevel(); this.persistState(); this.refresh(); });
+ 100         const btnColExpandLevel = document.createElement("button");
+ 101         btnColExpandLevel.className = "ghm-btn";
+ 102         btnColExpandLevel.textContent = "+⦀";
+ 103         btnColExpandLevel.title = "Expand Column Level";
+ 104         btnColExpandLevel.addEventListener("click", () => { this.expandColLevel(); this.persistState(); this.refresh(); });
+ 105         const btnColCollapseLevel = document.createElement("button");
+ 106         btnColCollapseLevel.className = "ghm-btn";
+ 107         btnColCollapseLevel.textContent = "−⦀";
+ 108         btnColCollapseLevel.title = "Collapse Column Level";
+ 109         btnColCollapseLevel.addEventListener("click", () => { this.collapseColLevel(); this.persistState(); this.refresh(); });
+ 110         const lblRepeat = document.createElement("label");
+ 111         lblRepeat.style.fontSize = "12px";
+ 112         const chkRepeat = document.createElement("input");
+ 113         chkRepeat.type = "checkbox";
+ 114         chkRepeat.addEventListener("change", () => { this.repeatLabels = chkRepeat.checked; this.persistState(); this.refresh(); });
+ 115         lblRepeat.appendChild(chkRepeat);
+ 116         lblRepeat.appendChild(document.createTextNode(" Repeat Labels"));
+ 117         // Add buttons
+ 118         this.toolbar.appendChild(btnExpand);
+ 119         const btnCollapseAll = document.createElement("button");
+ 120         btnCollapseAll.className = "ghm-btn";
+ 121         btnCollapseAll.textContent = "−All";
+ 122         btnCollapseAll.title = "Collapse All";
+ 123         btnCollapseAll.addEventListener("click", () => { this.collapseAll(); this.persistState(); this.refresh(); });
+ 124         btnExpand.textContent = "+All";
+ 125         btnExpand.title = "Expand All";
+ 126         
+ 127         this.toolbar.appendChild(btnRowExpandLevel);
+ 128         this.toolbar.appendChild(btnRowCollapseLevel);
+ 129         this.toolbar.appendChild(btnColExpandLevel);
+ 130         this.toolbar.appendChild(btnColCollapseLevel);
+ 131         this.toolbar.appendChild(btnCollapseAll);
+ 132         this.toolbar.appendChild(lblRepeat);
+ 133         const btnDebug = document.createElement("button");
+ 134         btnDebug.className = "ghm-btn";
+ 135         btnDebug.textContent = "🧪 Debug";
+ 136         btnDebug.addEventListener("click", () => { this.debugEnabled = !this.debugEnabled; this.updateDebugOverlay(); });
+ 137         this.toolbar.appendChild(btnDebug);
+ 138         this.container.appendChild(this.toolbar);
+ 139         // content host
+ 140         this.contentHost = document.createElement("div");
+ 141         this.container.appendChild(this.contentHost);
+ 142         // debug overlay
+ 143         this.debugEl = document.createElement("div");
+ 144         this.debugEl.className = "ghm-debug";
+ 145         this.debugEl.style.display = "none";
+ 146         this.container.appendChild(this.debugEl);
+ 147         options.element.appendChild(this.container);
+ 148     }
+ 149 
+ 150     public update(options: VisualUpdateOptions) {
+ 151         const dataView: DataView | undefined = options.dataViews && options.dataViews[0];
+ 152         this.formattingSettings = this.formattingSettingsService.populateFormattingSettingsModel(VisualFormattingSettingsModel, dataView);
+ 153         // Apply sticky preference if present
+ 154         const sticky = this.getObjectValue<boolean>(dataView?.metadata?.objects, "state", "stickyHeaders", true);
+ 155         this.container.classList.toggle("ghm-sticky", !!sticky);
+ 156         this.repeatLabels = this.getObjectValue<boolean>(dataView?.metadata?.objects, "state", "repeatLabels", false);
+ 157         this.rowHeaderMinWidth = this.getObjectValue<number>(dataView?.metadata?.objects, "state", "rowHeaderMinWidth", 160) || 160;
+ 158         this.rowHeaderFontSize = this.getObjectValue<number>(dataView?.metadata?.objects, "labels", "rowHeaderFontSize", 12) || 12;
+ 159         this.rowHeaderFontFamily = this.getObjectValue<string>(dataView?.metadata?.objects, "labels", "rowHeaderFontFamily", "");
+ 160         this.colHeaderFontSize = this.getObjectValue<number>(dataView?.metadata?.objects, "labels", "colHeaderFontSize", 11) || 11;
+ 161         this.colHeaderFontFamily = this.getObjectValue<string>(dataView?.metadata?.objects, "labels", "colHeaderFontFamily", "");
+ 162         // Reflect checkbox state
+ 163         const chk = this.toolbar.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
+ 164         if (chk) chk.checked = this.repeatLabels;
+ 165         // Load persisted widths and collapsed sets
+ 166         const widthsJson = this.getObjectValue<string>(dataView?.metadata?.objects, "state", "columnWidths", "");
+ 167         if (widthsJson) {
+ 168             try {
+ 169                 const w = JSON.parse(widthsJson) as { [k: string]: number };
+ 170                 this.columnWidthPx = new Map(Object.entries(w));
+ 171             } catch {}
+ 172         }
+ 173         const colsJson = this.getObjectValue<string>(dataView?.metadata?.objects, "state", "collapsedCols", "");
+ 174         if (colsJson) {
+ 175             try { this.collapsedColKeys = new Set(JSON.parse(colsJson)); this.collapseInitialized = true; } catch {}
+ 176         }
+ 177         const rowsJson = this.getObjectValue<string>(dataView?.metadata?.objects, "state", "collapsedRows", "");
+ 178         if (rowsJson) {
+ 179             try { this.collapsedRowKeys = new Set(JSON.parse(rowsJson)); this.collapseInitialized = true; } catch {}
+ 180         }
+ 181         // If no measure is bound, force all expanded to show full structure
+ 182         const noMeasures = !(dataView && dataView.matrix && dataView.matrix.valueSources && dataView.matrix.valueSources.length > 0);
+ 183         if (noMeasures) {
+ 184             this.collapsedColKeys.clear();
+ 185             this.collapsedRowKeys.clear();
+ 186             this.collapseInitialized = true;
+ 187         }
+ 188 
+ 189         // Clear only content (preserve toolbar)
+ 190         while (this.contentHost.firstChild) this.contentHost.removeChild(this.contentHost.firstChild);
+ 191 
+ 192         if (!dataView || !dataView.matrix) {
+ 193             this.renderPlaceholder("Add Columns hierarchy and a measure");
+ 194             return;
+ 195         }
+ 196 
+ 197         try {
+ 198             this.lastMatrix = dataView.matrix;
+ 199             if (!this.collapseInitialized) {
+ 200                 const mc = (this.lastMatrix.valueSources && this.lastMatrix.valueSources.length) ? this.lastMatrix.valueSources.length : 0;
+ 201                 const enableDefault = mc > 0; // don't default-collapse when no measures bound
+ 202                 this.initializeDefaultCollapsed(this.lastMatrix, enableDefault);
+ 203                 this.collapseInitialized = true;
+ 204             }
+ 205             this.renderMatrix(dataView.matrix);
+ 206         } catch (e) {
+ 207             this.renderPlaceholder("Unable to render matrix");
+ 208             console.error(e);
+ 209         }
+ 210     }
+ 211 
+ 212     public getFormattingModel(): powerbi.visuals.FormattingModel {
+ 213         return this.formattingSettingsService.buildFormattingModel(this.formattingSettings);
+ 214     }
+ 215 
+ 216     private renderPlaceholder(text: string) {
+ 217         const el = document.createElement("div");
+ 218         el.className = "ghm-placeholder";
+ 219         el.textContent = text;
+ 220         this.contentHost.appendChild(el);
+ 221     }
+ 222 
+ 223     private renderMatrix(matrix: DataViewMatrix) {
+ 224         const columns = matrix.columns;
+ 225         const rows = matrix.rows;
+ 226 
+ 227         if (!columns || !columns.root || !columns.root.children || columns.root.children.length === 0) {
+ 228             this.renderPlaceholder("No column hierarchy provided");
+ 229             return;
+ 230         }
+ 231 
+ 232         const table = document.createElement("table");
+ 233         table.className = "ghm-table";
+ 234         // Apply a global font if only one family provided
+ 235         if (this.rowHeaderFontFamily && !this.colHeaderFontFamily) table.style.fontFamily = this.rowHeaderFontFamily;
+ 236         if (this.colHeaderFontFamily && !this.rowHeaderFontFamily) table.style.fontFamily = this.colHeaderFontFamily;
+ 237         const colgroup = document.createElement("colgroup");
+ 238         const thead = document.createElement("thead");
+ 239         const tbody = document.createElement("tbody");
+ 240 
+ 241         // Determine columns to display (compress collapsed groups to a single column)
+ 242         const colDepth = this.getColumnDepth(columns);
+ 243         const displayCols = this.computeDisplayColumns(columns.root, colDepth);
+ 244         // Build column header rows from the display list
+ 245         const headerRows = this.buildHeaderRowsFromDisplay(displayCols, colDepth);
+ 246 
+ 247         // Measures handling: if multiple measures, add an extra header row and expand colspans
+ 248         const measureCount = (matrix.valueSources && matrix.valueSources.length) ? matrix.valueSources.length : 1;
+ 249         const measureLabels = (matrix.valueSources || []).map((m, idx) => String((m as any).displayName || (m as any).queryName || `Measure ${idx + 1}`));
+ 250         if (measureCount > 1) {
+ 251             for (const row of headerRows) {
+ 252                 for (const cell of row) cell.span = (cell.span || 1) * measureCount;
+ 253             }
+ 254         }
+ 255 
+ 256         // Determine number of row header levels (depth)
+ 257         const rowDepth = this.getRowDepth(rows);
+ 258         const visibleRowDepth = this.repeatLabels ? rowDepth : this.getVisibleRowDepth(rows, rowDepth);
+ 259         // Include the thin resizer row as part of the sticky header block
+ 260         const headerDepth = headerRows.length + (measureCount > 1 ? 1 : 0) + 1;
+ 261 
+ 262         headerRows.forEach((rowCells, i) => {
+ 263             const tr = document.createElement("tr");
+ 264             if (i === 0 && visibleRowDepth > 0) {
+ 265                 const corner = document.createElement("th");
+ 266                 corner.className = "ghm-corner";
+ 267                 corner.rowSpan = headerDepth;
+ 268                 if (visibleRowDepth > 1) corner.colSpan = visibleRowDepth;
+ 269                 tr.appendChild(corner);
+ 270             }
+ 271             for (const cell of rowCells) {
+ 272                 const th = document.createElement("th");
+ 273                 th.className = "ghm-colheader";
+ 274                 th.title = cell.label;
+ 275                 // Toggle indicator and label
+ 276                 if (cell.togglable) {
+ 277                     const toggle = document.createElement("span");
+ 278                     toggle.className = "ghm-toggle";
+ 279                     toggle.textContent = cell.collapsed ? "+" : "−";
+ 280                     toggle.addEventListener("click", (ev) => {
+ 281                         ev.stopPropagation();
+ 282                         if (cell.collapsed) this.collapsedColKeys.delete(cell.key);
+ 283                         else this.collapsedColKeys.add(cell.key);
+ 284                         this.persistState();
+ 285                         this.refresh();
+ 286                     });
+ 287                     th.appendChild(toggle);
+ 288                 }
+ 289                 const txt = document.createElement("span");
+ 290                 txt.textContent = cell.label;
+ 291                 if (this.colHeaderFontSize) txt.style.fontSize = `${this.colHeaderFontSize}px`;
+ 292                 if (this.colHeaderFontFamily) txt.style.fontFamily = this.colHeaderFontFamily;
+ 293                 th.appendChild(txt);
+ 294                 if (cell.span && cell.span > 1) th.colSpan = cell.span;
+ 295                 tr.appendChild(th);
+ 296             }
+ 297             thead.appendChild(tr);
+ 298         });
+ 299 
+ 300         if (measureCount > 1) {
+ 301             const tr = document.createElement("tr");
+ 302             for (const ref of displayCols) {
+ 303                 for (let m = 0; m < measureCount; m++) {
+ 304                     const th = document.createElement("th");
+ 305                     th.className = "ghm-colheader";
+ 306                     th.textContent = measureLabels[m] ?? `M${m + 1}`;
+ 307                     tr.appendChild(th);
+ 308                 }
+ 309             }
+ 310             thead.appendChild(tr);
+ 311         }
+ 312 
+ 313         // Resizer row (always present so handles align with columns)
+ 314         const resizerRow = document.createElement("tr");
+ 315         resizerRow.className = "ghm-resizers-row";
+ 316         const resizerRefs = displayCols;
+ 317         for (const ref of resizerRefs) {
+ 318             for (let m = 0; m < measureCount; m++) {
+ 319                 const th = document.createElement("th");
+ 320                 th.className = "ghm-resizer-cell";
+ 321                 const key = (ref.kind === "leaf") ? ref.keys.join("||") : ref.key;
+ 322                 const handle = document.createElement("div");
+ 323                 handle.className = "ghm-resizer";
+ 324                 handle.title = "Drag to resize column";
+ 325                 handle.addEventListener("mousedown", (e) => this.beginResize(e as MouseEvent, key));
+ 326                 th.appendChild(handle);
+ 327                 resizerRow.appendChild(th);
+ 328             }
+ 329         }
+ 330         thead.appendChild(resizerRow);
+ 331 
+ 332         // Determine column leaf count (for cell generation) and order
+ 333         const columnLeaves = displayCols;
+ 334 
+ 335         // Build colgroup to control widths
+ 336         this.colElsByKey.clear();
+ 337         // Prepend only visible row-header columns so grid tightens when collapsed
+ 338         for (let r = 0; r < visibleRowDepth; r++) {
+ 339             const col = document.createElement("col");
+ 340             col.style.width = (r === 0 ? `${this.rowHeaderMinWidth}px` : "120px");
+ 341             colgroup.appendChild(col);
+ 342         }
+ 343         for (const ref of columnLeaves) {
+ 344             const key = (ref.kind === "leaf") ? ref.keys.join("||") : ref.key;
+ 345             const width = this.columnWidthPx.get(key) ?? 120;
+ 346             for (let m = 0; m < measureCount; m++) {
+ 347                 const col = document.createElement("col");
+ 348                 col.style.width = `${width}px`;
+ 349                 colgroup.appendChild(col);
+ 350                 if (!this.colElsByKey.has(key)) this.colElsByKey.set(key, []);
+ 351                 this.colElsByKey.get(key)!.push(col);
+ 352             }
+ 353         }
+ 354 
+ 355         const colLeafCount = columnLeaves.length;
+ 356 
+ 357         // Build body rows
+ 358         if (rows && rows.root && rows.root.children && rows.root.children.length) {
+ 359             if (this.repeatLabels) {
+ 360                 const flatRows = this.collectDisplayRowsRepeat(rows.root, rowDepth);
+ 361                 for (const rowInfo of flatRows) {
+ 362                     const tr = document.createElement("tr");
+ 363                     for (let lvl = 0; lvl < rowDepth; lvl++) {
+ 364                         const th = document.createElement("th");
+ 365                         th.className = "ghm-rowheader";
+ 366                         th.textContent = rowInfo.labels[lvl] || "";
+ 367                         this.applyRowHeaderStyle(th);
+ 368                         tr.appendChild(th);
+ 369                     }
+ 370                     const valuesMap = rowInfo.valuesMap || {} as any;
+ 371                     const numericKeys = rowInfo.numericKeys || [];
+ 372                     for (let c = 0; c < colLeafCount; c++) {
+ 373                         for (let m = 0; m < measureCount; m++) {
+ 374                             const td = document.createElement("td");
+ 375                             const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], m, measureCount);
+ 376                             td.textContent = this.formatValue(v);
+ 377                             tr.appendChild(td);
+ 378                         }
+ 379                     }
+ 380                     tbody.appendChild(tr);
+ 381                 }
+ 382             } else {
+ 383                 const createdRows = this.renderRowGroup(rows.root, 0, "", columnLeaves, measureCount);
+ 384                 for (const tr of createdRows) tbody.appendChild(tr);
+ 385             }
+ 386         } else {
+ 387             // No row groups – single total row
+ 388             const tr = document.createElement("tr");
+ 389             // Data cells
+ 390             const valuesMap = rows && rows.root ? rows.root.values || {} : {};
+ 391             const numericKeys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a, b) => a - b);
+ 392             for (let c = 0; c < colLeafCount; c++) {
+ 393                 for (let m = 0; m < measureCount; m++) {
+ 394                     const td = document.createElement("td");
+ 395                     const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], m, measureCount);
+ 396                     td.textContent = this.formatValue(v);
+ 397                     tr.appendChild(td);
+ 398                 }
+ 399             }
+ 400             tbody.appendChild(tr);
+ 401         }
+ 402 
+ 403         table.appendChild(colgroup);
+ 404         table.appendChild(thead);
+ 405         table.appendChild(tbody);
+ 406         this.contentHost.appendChild(table);
+ 407         this.applyStickyOffsets(thead);
+ 408         this.updateDebugOverlay({ table, headerRows, measureCount, columnLeaves, rowDepth, colDepth });
+ 409     }
+ 410 
+ 411     private computeDisplayColumns(root: DataViewMatrixNode, depth: number): DisplayCol[] {
+ 412         type Leaf = { offset: number; labels: string[]; keys: string[]; collapsedAt: number | null; start?: number; end?: number };
+ 413         const leaves: Leaf[] = [];
+ 414         const ranges = new Map<string, { start: number; end: number; level: number }>();
+ 415         let offset = 0;
+ 416         const walk = (node: DataViewMatrixNode, labels: string[], keys: string[]) => {
+ 417             const label = this.nodeLabel(node);
+ 418             const key = [...keys, label].filter(Boolean).join("||");
+ 419             const newLabels = [...labels, label];
+ 420             const newKeys = [...keys, label];
+ 421             if (!node.children || node.children.length === 0) {
+ 422                 let collapsedAt: number | null = null;
+ 423                 for (let i = 0; i < newLabels.length; i++) {
+ 424                     const k = newKeys.slice(0, i + 1).filter(Boolean).join("||");
+ 425                     if (this.collapsedColKeys.has(k)) { collapsedAt = i; break; }
+ 426                 }
+ 427                 while (newLabels.length < depth) newLabels.push("");
+ 428                 while (newKeys.length < depth) newKeys.push(newKeys[newKeys.length - 1] || "");
+ 429                 const leaf: Leaf = { offset, labels: newLabels, keys: newKeys, collapsedAt };
+ 430                 if (collapsedAt !== null) {
+ 431                     const gkey = newKeys.slice(0, collapsedAt + 1).filter(Boolean).join("||");
+ 432                     const r = ranges.get(gkey);
+ 433                     if (!r) ranges.set(gkey, { start: offset, end: offset, level: collapsedAt });
+ 434                     else r.end = offset;
+ 435                 }
+ 436                 leaves.push(leaf);
+ 437                 offset++;
+ 438                 return;
+ 439             }
+ 440             for (const ch of node.children) walk(ch, newLabels, newKeys);
+ 441         };
+ 442         if (root.children) for (const ch of root.children) walk(ch, [], []);
+ 443 
+ 444         const result: DisplayCol[] = [];
+ 445         let i = 0;
+ 446         while (i < leaves.length) {
+ 447             const leaf = leaves[i];
+ 448             if (leaf.collapsedAt !== null) {
+ 449                 const gkey = leaf.keys.slice(0, leaf.collapsedAt + 1).filter(Boolean).join("||");
+ 450                 const r = ranges.get(gkey)!;
+ 451                 result.push({ kind: "collapsed", start: r.start, end: r.end, labels: leaf.labels, keys: leaf.keys, collapsedLevel: r.level, key: gkey });
+ 452                 i = r.end + 1;
+ 453             } else {
+ 454                 result.push({ kind: "leaf", offset: leaf.offset, labels: leaf.labels, keys: leaf.keys });
+ 455                 i++;
+ 456             }
+ 457         }
+ 458         return result;
+ 459     }
+ 460 
+ 461     private isAnyAncestorCollapsed(path: string[]): boolean {
+ 462         // path is array of labels up to, but not including, the leaf
+ 463         let accum: string[] = [];
+ 464         for (const p of path) {
+ 465             accum.push(p);
+ 466             const k = accum.join("||");
+ 467             if (this.collapsedColKeys.has(k)) return true;
+ 468         }
+ 469         return false;
+ 470     }
+ 471 
+ 472     private getRowDepth(rows?: powerbi.DataViewHierarchy): number {
+ 473         if (!rows || !rows.root) return 0;
+ 474         if (rows.levels && rows.levels.length) return rows.levels.length;
+ 475         const depthFrom = (node: DataViewMatrixNode): number => {
+ 476             if (!node.children || node.children.length === 0) return 0;
+ 477             let max = 0;
+ 478             for (const c of node.children) max = Math.max(max, depthFrom(c));
+ 479             return 1 + max;
+ 480         };
+ 481         if (!rows.root.children || rows.root.children.length === 0) return 0;
+ 482         return depthFrom(rows.root);
+ 483     }
+ 484 
+ 485     private getColumnDepth(columns?: powerbi.DataViewHierarchy): number {
+ 486         if (!columns || !columns.root) return 0;
+ 487         if (columns.levels && columns.levels.length) return columns.levels.length;
+ 488         const depthFrom = (node: DataViewMatrixNode): number => {
+ 489             if (!node.children || node.children.length === 0) return 1;
+ 490             let max = 0;
+ 491             for (const c of node.children) max = Math.max(max, depthFrom(c));
+ 492             return 1 + max;
+ 493         };
+ 494         if (!columns.root.children || columns.root.children.length === 0) return 1;
+ 495         return depthFrom(columns.root);
+ 496     }
+ 497 
+ 498     private renderRowGroup(node: DataViewMatrixNode, depth: number, parentKey: string, columnLeaves: DisplayCol[], measureCount: number): HTMLTableRowElement[] {
+ 499         // Skip the artificial root and render its children
+ 500         if (node.level === undefined && node.children && node.children.length) {
+ 501             let all: HTMLTableRowElement[] = [];
+ 502             for (const child of node.children) {
+ 503                 all = all.concat(this.renderRowGroup(child, 0, parentKey, columnLeaves, measureCount));
+ 504             }
+ 505             return all;
+ 506         }
+ 507 
+ 508         if (node.children && node.children.length) {
+ 509             let rows: HTMLTableRowElement[] = [];
+ 510             const label = this.nodeLabel(node) || "Total";
+ 511             const thisKey = [parentKey, label].filter(Boolean).join("||");
+ 512             const collapsed = this.collapsedRowKeys.has(thisKey);
+ 513             if (collapsed) {
+ 514                 // Render a single group row with group aggregates
+ 515                 const tr = document.createElement("tr");
+ 516                 const th = document.createElement("th");
+ 517                 th.className = "ghm-rowheader";
+ 518                 th.title = label;
+ 519                 const toggle = document.createElement("span");
+ 520                 toggle.className = "ghm-toggle";
+ 521                 toggle.textContent = "+";
+ 522                 toggle.addEventListener("click", (ev) => {
+ 523                     ev.stopPropagation();
+ 524                     this.collapsedRowKeys.delete(thisKey);
+ 525                     this.persistState();
+ 526                     this.refresh();
+ 527                 });
+ 528                 th.appendChild(toggle);
+ 529                 const txt = document.createElement("span");
+ 530                 txt.textContent = label;
+ 531                 if (this.rowHeaderFontSize) txt.style.fontSize = `${this.rowHeaderFontSize}px`;
+ 532                 if (this.rowHeaderFontFamily) txt.style.fontFamily = this.rowHeaderFontFamily;
+ 533                 th.appendChild(txt);
+ 534                 tr.appendChild(th);
+ 535                 // fill remaining row header columns (collapsed depths)
+ 536                 const visDepth = this.repeatLabels ? this.getRowDepth(this.lastMatrix?.rows) : this.getDisplayedRowDepth(this.lastMatrix?.rows);
+ 537                 for (let k = 1; k < visDepth; k++) {
+ 538                     const thFill = document.createElement("th");
+ 539                     thFill.className = "ghm-rowheader";
+ 540                     this.applyRowHeaderStyle(thFill);
+ 541                     tr.appendChild(thFill);
+ 542                 }
+ 543                 for (let c = 0; c < columnLeaves.length; c++) {
+ 544                     for (let m = 0; m < measureCount; m++) {
+ 545                         const td = document.createElement("td");
+ 546                         const v = this.getCollapsedRowGroupValue(node, columnLeaves[c], m, measureCount);
+ 547                         td.textContent = this.formatValue(v);
+ 548                         tr.appendChild(td);
+ 549                     }
+ 550                 }
+ 551                 return [tr];
+ 552             } else {
+ 553                 for (const child of node.children) {
+ 554                     rows = rows.concat(this.renderRowGroup(child, depth + 1, thisKey, columnLeaves, measureCount));
+ 555                 }
+ 556                 if (rows.length > 0) {
+ 557                     const th = document.createElement("th");
+ 558                     th.className = "ghm-rowheader";
+ 559                     th.title = label;
+ 560                     const toggle = document.createElement("span");
+ 561                     toggle.className = "ghm-toggle";
+ 562                     toggle.textContent = "−";
+ 563                     toggle.addEventListener("click", (ev) => {
+ 564                         ev.stopPropagation();
+ 565                     this.collapsedRowKeys.add(thisKey);
+ 566                     this.persistState();
+ 567                     this.refresh();
+ 568                 });
+ 569                     th.appendChild(toggle);
+ 570                     const txt = document.createElement("span");
+ 571                     txt.textContent = label;
+ 572                     th.appendChild(txt);
+ 573                     th.rowSpan = rows.length;
+ 574                     rows[0].insertBefore(th, rows[0].firstChild);
+ 575                 }
+ 576                 return rows;
+ 577             }
+ 578         }
+ 579 
+ 580         // Leaf row: create a row, add deepest-level header, then data cells
+ 581         const tr = document.createElement("tr");
+ 582             const th = document.createElement("th");
+ 583             th.className = "ghm-rowheader";
+ 584             th.textContent = this.nodeLabel(node) || "";
+ 585             th.rowSpan = 1;
+ 586             this.applyRowHeaderStyle(th);
+ 587             tr.appendChild(th);
+ 588 
+ 589         const valuesMap = node.values || {};
+ 590         const numericKeys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a, b) => a - b);
+ 591         for (let c = 0; c < columnLeaves.length; c++) {
+ 592             for (let m = 0; m < measureCount; m++) {
+ 593                 const td = document.createElement("td");
+ 594                 const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], m, measureCount);
+ 595                 td.textContent = this.formatValue(v);
+ 596                 tr.appendChild(td);
+ 597             }
+ 598         }
+ 599         return [tr];
+ 600     }
+ 601 
+ 602     private refresh() {
+ 603         // Re-render using the last received matrix
+ 604         while (this.contentHost.firstChild) this.contentHost.removeChild(this.contentHost.firstChild);
+ 605         if (this.lastMatrix) this.renderMatrix(this.lastMatrix);
+ 606     }
+ 607 
+ 608     private applyStickyOffsets(thead: HTMLTableSectionElement) {
+ 609         if (!this.container.classList.contains("ghm-sticky")) return;
+ 610 
+ 611         const compute = () => {
+ 612             const rows = Array.from(thead.rows);
+ 613             // If first row has no height yet, try again on next frame
+ 614             const firstH = rows[0] ? (rows[0].offsetHeight || rows[0].getBoundingClientRect().height) : 0;
+ 615             if (!firstH) {
+ 616                 requestAnimationFrame(compute);
+ 617                 return;
+ 618             }
+ 619             let top = 0;
+ 620             for (const tr of rows) {
+ 621                 const h = tr.offsetHeight || tr.getBoundingClientRect().height || 0;
+ 622                 const cells = Array.from(tr.cells) as HTMLElement[];
+ 623                 for (const cell of cells) (cell as HTMLElement).style.top = `${top}px`;
+ 624                 top += h;
+ 625             }
+ 626         };
+ 627         requestAnimationFrame(compute);
+ 628         window.addEventListener("resize", () => requestAnimationFrame(compute), { once: true });
+ 629     }
+ 630 
+ 631     private persistState() {
+ 632         const widthsObj: any = {};
+ 633         for (const [k, v] of this.columnWidthPx.entries()) widthsObj[k] = v;
+ 634         this.host.persistProperties({
+ 635             merge: [
+ 636                 {
+ 637                     objectName: "state",
+ 638                     properties: {
+ 639                         columnWidths: JSON.stringify(widthsObj),
+ 640                         collapsedCols: JSON.stringify(Array.from(this.collapsedColKeys)),
+ 641                         collapsedRows: JSON.stringify(Array.from(this.collapsedRowKeys)),
+ 642                         repeatLabels: this.repeatLabels
+ 643                     },
+ 644                     selector: null
+ 645                 }
+ 646             ]
+ 647         });
+ 648     }
+ 649 
+ 650     private getObjectValue<T>(objects: powerbi.DataViewObjects | undefined, objectName: string, propertyName: string, defaultValue: T): T {
+ 651         const obj = objects && (objects as any)[objectName];
+ 652         const v = obj && obj[propertyName];
+ 653         return (v !== undefined) ? (v as T) : defaultValue;
+ 654     }
+ 655 
+ 656     private updateDebugOverlay(ctx?: { table: HTMLTableElement; headerRows: Array<any>; measureCount: number; columnLeaves: DisplayCol[]; rowDepth: number; colDepth: number }) {
+ 657         if (!this.debugEl) return;
+ 658         if (!this.debugEnabled) { this.debugEl.style.display = "none"; return; }
+ 659         this.debugEl.style.display = "block";
+ 660         if (!ctx || !this.lastMatrix) { this.debugEl.textContent = "Debug: no context"; return; }
+ 661 
+ 662         const measureCount = ctx.measureCount || 0;
+ 663         const displayCols = ctx.columnLeaves.length;
+ 664         const dataCols = displayCols * Math.max(1, measureCount || 0);
+ 665         const totalColsPlanned = ctx.rowDepth + dataCols;
+ 666         const headerRowsPlanned = ctx.headerRows.length + (measureCount > 1 ? 1 : 0) + 1; // + resizer
+ 667 
+ 668         const rowInfo = this.computeRowInfo(this.lastMatrix.rows, ctx.rowDepth);
+ 669         const topLabels = (this.lastMatrix.rows?.root?.children || []).map(n => this.nodeLabel(n as any));
+ 670 
+ 671         const lines = [
+ 672             `rowDepth=${ctx.rowDepth} colDepth=${ctx.colDepth} measures=${measureCount}`,
+ 673             `displayCols=${displayCols} dataCols=${dataCols} totalColsPlanned=${totalColsPlanned}`,
+ 674             `headerRowsPlanned=${headerRowsPlanned}`,
+ 675             `predictedDataRows=${rowInfo.count} topLevel=${topLabels.length}`,
+ 676             `topLevelLabels=${topLabels.join(', ')}`,
+ 677             `collapsedRows=${this.collapsedRowKeys.size} collapsedCols=${this.collapsedColKeys.size}`
+ 678         ];
+ 679         this.debugEl.textContent = lines.join('\n');
+ 680     }
+ 681 
+ 682     private computeRowInfo(rows: powerbi.DataViewHierarchy | undefined, rowDepth: number): { count: number } {
+ 683         if (!rows || !rows.root) return { count: 0 };
+ 684         if (this.repeatLabels) {
+ 685             const flat = this.collectDisplayRowsRepeat(rows.root, rowDepth);
+ 686             return { count: flat.length };
+ 687         }
+ 688         const countFrom = (node: DataViewMatrixNode, parentKey: string): number => {
+ 689             if (node.level === undefined && node.children && node.children.length) {
+ 690                 let total = 0; for (const ch of node.children) total += countFrom(ch, ''); return total;
+ 691             }
+ 692             const label = this.nodeLabel(node);
+ 693             const key = [parentKey, label].filter(Boolean).join('||');
+ 694             if (node.children && node.children.length) {
+ 695                 if (this.collapsedRowKeys.has(key)) return 1;
+ 696                 let total = 0; for (const ch of node.children) total += countFrom(ch, key); return total;
+ 697             }
+ 698             return 1;
+ 699         };
+ 700         return { count: countFrom(rows.root, '') };
+ 701     }
+ 702 
+ 703     private getCollapsedRowGroupValue(node: DataViewMatrixNode, ref: DisplayCol, measureIndex: number, measureCount: number): any {
+ 704         // Prefer host-provided row subtotal on the collapsed node itself
+ 705         const tryFromNodeValues = (): any => {
+ 706             const valuesMap = (node.values || {}) as any;
+ 707             if (ref.kind === "leaf") {
+ 708                 const key = ref.offset * measureCount + measureIndex;
+ 709                 const cell = valuesMap[key];
+ 710                 if (cell && cell.value != null) return cell.value;
+ 711                 return undefined;
+ 712             } else {
+ 713                 // Collapsed column group: combine the node's per-column-leaf values across the range if present
+ 714                 let hasAny = false; let total: number | null = null; let first: any = null;
+ 715                 for (let off = ref.start; off <= ref.end; off++) {
+ 716                     const key = off * measureCount + measureIndex;
+ 717                     const cell = valuesMap[key];
+ 718                     if (cell && cell.value != null) {
+ 719                         hasAny = true;
+ 720                         if (typeof cell.value === "number") total = (total ?? 0) + (cell.value as number);
+ 721                         else if (first === null) first = cell.value;
+ 722                     }
+ 723                 }
+ 724                 if (hasAny) return total !== null ? total : first;
+ 725                 return undefined;
+ 726             }
+ 727         };
+ 728 
+ 729         const direct = tryFromNodeValues();
+ 730         if (direct !== undefined) return direct;
+ 731         // Otherwise leave empty by design
+ 732         return "";
+ 733     }
+ 734 
+ 735     private aggregateAcrossRowLeaves(node: DataViewMatrixNode, ref: DisplayCol, measureIndex: number, measureCount: number): { sum: number | null; first: any } {
+ 736         let sum: number | null = null;
+ 737         let first: any = null;
+ 738         const visit = (n: DataViewMatrixNode) => {
+ 739             if (!n.children || n.children.length === 0) {
+ 740                 const valuesMap = (n.values || {}) as any;
+ 741                 if (ref.kind === "leaf") {
+ 742                     const key = ref.offset * measureCount + measureIndex;
+ 743                     const cell = valuesMap[key];
+ 744                     if (cell && cell.value != null) {
+ 745                         if (typeof cell.value === "number") sum = (sum ?? 0) + (cell.value as number);
+ 746                         else if (first === null) first = cell.value;
+ 747                     }
+ 748                 } else {
+ 749                     for (let off = ref.start; off <= ref.end; off++) {
+ 750                         const key = off * measureCount + measureIndex;
+ 751                         const cell = valuesMap[key];
+ 752                         if (cell && cell.value != null) {
+ 753                             if (typeof cell.value === "number") sum = (sum ?? 0) + (cell.value as number);
+ 754                             else if (first === null) first = cell.value;
+ 755                         }
+ 756                     }
+ 757                 }
+ 758                 return;
+ 759             }
+ 760             for (const ch of n.children) visit(ch);
+ 761         };
+ 762         visit(node);
+ 763         return { sum, first };
+ 764     }
+ 765 
+ 766     private getVisibleRowDepth(rows: powerbi.DataViewHierarchy | undefined, maxDepth: number): number {
+ 767         if (!rows || !rows.root) return maxDepth;
+ 768         const depthFrom = (node: DataViewMatrixNode, depth: number, parentKey: string): number => {
+ 769             const label = this.nodeLabel(node);
+ 770             const key = [parentKey, label].filter(Boolean).join("||");
+ 771             if (!node.children || node.children.length === 0) return depth + 1;
+ 772             if (this.collapsedRowKeys.has(key)) return depth + 1;
+ 773             let max = depth + 1;
+ 774             for (const ch of node.children) max = Math.max(max, depthFrom(ch, depth + 1, key));
+ 775             return max;
+ 776         };
+ 777         if (!rows.root.children || rows.root.children.length === 0) return 1;
+ 778         let m = 1; for (const ch of rows.root.children) m = Math.max(m, depthFrom(ch, 0, ""));
+ 779         return Math.min(maxDepth, m);
+ 780     }
+ 781 
+ 782     private applyRowHeaderStyle(th: HTMLElement) {
+ 783         if (this.rowHeaderFontSize) th.style.fontSize = `${this.rowHeaderFontSize}px`;
+ 784         if (this.rowHeaderFontFamily) th.style.fontFamily = this.rowHeaderFontFamily;
+ 785     }
+ 786 
+ 787     private getDisplayedRowDepth(rows?: powerbi.DataViewHierarchy): number {
+ 788         if (!rows || !rows.root || !rows.root.children) return 1;
+ 789         const depthFrom = (node: DataViewMatrixNode, depth: number, parentKey: string): number => {
+ 790             const label = this.nodeLabel(node);
+ 791             const key = [parentKey, label].filter(Boolean).join("||");
+ 792             if (this.collapsedRowKeys.has(key)) return depth + 1;
+ 793             if (!node.children || node.children.length === 0) return depth + 1;
+ 794             let max = depth + 1;
+ 795             for (const ch of node.children) max = Math.max(max, depthFrom(ch, depth + 1, key));
+ 796             return max;
+ 797         };
+ 798         let m = 1; for (const ch of rows.root.children) m = Math.max(m, depthFrom(ch, 0, ""));
+ 799         return m;
+ 800     }
+ 801 
+ 802     private getDisplayedColDepth(cols?: powerbi.DataViewHierarchy): number {
+ 803         if (!cols || !cols.root || !cols.root.children) return 1;
+ 804         const depthFrom = (node: DataViewMatrixNode, depth: number, path: string[]): number => {
+ 805             const label = this.nodeLabel(node);
+ 806             const key = [...path, label].filter(Boolean).join("||");
+ 807             if (this.collapsedColKeys.has(key)) return depth + 1;
+ 808             if (!node.children || node.children.length === 0) return depth + 1;
+ 809             let max = depth + 1;
+ 810             for (const ch of node.children) max = Math.max(max, depthFrom(ch, depth + 1, [...path, label]));
+ 811             return max;
+ 812         };
+ 813         let m = 1; for (const ch of cols.root.children) m = Math.max(m, depthFrom(ch, 0, []));
+ 814         return m;
+ 815     }
+ 816 
+ 817     private collapseAll() {
+ 818         if (this.lastMatrix?.columns?.root?.children) {
+ 819             const add = (node: DataViewMatrixNode, path: string[]) => {
+ 820                 const label = this.nodeLabel(node);
+ 821                 const key = [...path, label].filter(Boolean).join("||");
+ 822                 if (node.children && node.children.length) {
+ 823                     if (key) this.collapsedColKeys.add(key);
+ 824                     for (const ch of node.children) add(ch, [...path, label]);
+ 825                 }
+ 826             };
+ 827             for (const ch of this.lastMatrix.columns.root.children) add(ch, []);
+ 828         }
+ 829         if (this.lastMatrix?.rows?.root?.children) {
+ 830             const add = (node: DataViewMatrixNode, path: string[]) => {
+ 831                 const label = this.nodeLabel(node);
+ 832                 const key = [...path, label].filter(Boolean).join("||");
+ 833                 if (node.children && node.children.length) {
+ 834                     if (key) this.collapsedRowKeys.add(key);
+ 835                     for (const ch of node.children) add(ch, [...path, label]);
+ 836                 }
+ 837             };
+ 838             for (const ch of this.lastMatrix.rows.root.children) add(ch, []);
+ 839         }
+ 840     }
+ 841 
+ 842     private expandAll() {
+ 843         this.collapsedColKeys.clear();
+ 844         this.collapsedRowKeys.clear();
+ 845     }
+ 846 
+ 847     private collectDisplayRowsRepeat(node: DataViewMatrixNode, rowDepth: number, parentLabels: string[] = [], parentKey: string = ""): Array<{ labels: string[]; valuesMap?: { [key: number]: powerbi.DataViewMatrixNodeValue }; numericKeys?: number[] }> {
+ 848         const rows: Array<{ labels: string[]; valuesMap?: { [key: number]: powerbi.DataViewMatrixNodeValue }; numericKeys?: number[] }> = [];
+ 849         const label = this.nodeLabel(node);
+ 850         const thisKey = [parentKey, label].filter(Boolean).join("||");
+ 851         const labels = label ? [...parentLabels, label] : [...parentLabels];
+ 852         if (node.level === undefined && node.children && node.children.length) {
+ 853             for (const ch of node.children) rows.push(...this.collectDisplayRowsRepeat(ch, rowDepth, labels, thisKey));
+ 854             return rows;
+ 855         }
+ 856         if (node.children && node.children.length) {
+ 857             if (this.collapsedRowKeys.has(thisKey)) {
+ 858                 const padded = [...labels]; while (padded.length < rowDepth) padded.push("");
+ 859                 rows.push({ labels: padded });
+ 860                 return rows;
+ 861             }
+ 862             for (const ch of node.children) rows.push(...this.collectDisplayRowsRepeat(ch, rowDepth, labels, thisKey));
+ 863             return rows;
+ 864         }
+ 865         const padded = [...labels]; while (padded.length < rowDepth) padded.push("");
+ 866         const valuesMap = node.values || {};
+ 867         const numericKeys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a, b) => a - b);
+ 868         rows.push({ labels: padded, valuesMap: valuesMap as any, numericKeys });
+ 869         return rows;
+ 870     }
+ 871 
+ 872     // Level-wise expand/collapse helpers
+ 873     private collapseRowLevel() {
+ 874         if (!this.lastMatrix?.rows?.root?.children) return;
+ 875         const currentDepth = this.getDisplayedRowDepth(this.lastMatrix.rows);
+ 876         if (currentDepth <= 1) return;
+ 877         const targetDepth = currentDepth - 1; // collapse one level globally
+ 878         const addKeysAtDepth = (node: DataViewMatrixNode, depth: number, path: string[]) => {
+ 879             const label = this.nodeLabel(node);
+ 880             const key = [...path, label].filter(Boolean).join("||");
+ 881             if (!node.children || node.children.length === 0) return;
+ 882             if (depth === targetDepth) {
+ 883                 if (!this.collapsedRowKeys.has(key)) this.collapsedRowKeys.add(key);
+ 884                 return;
+ 885             }
+ 886             for (const ch of node.children) addKeysAtDepth(ch, depth + 1, [...path, label]);
+ 887         };
+ 888         for (const ch of this.lastMatrix.rows.root.children) addKeysAtDepth(ch, 1, []);
+ 889     }
+ 890 
+ 891     private expandRowLevel() {
+ 892         if (this.collapsedRowKeys.size === 0) return;
+ 893         let minDepth = Number.MAX_SAFE_INTEGER;
+ 894         for (const key of this.collapsedRowKeys) {
+ 895             const depth = key ? key.split("||").length : 1;
+ 896             if (depth < minDepth) minDepth = depth;
+ 897         }
+ 898         for (const key of Array.from(this.collapsedRowKeys)) {
+ 899             const depth = key ? key.split("||").length : 1;
+ 900             if (depth === minDepth) this.collapsedRowKeys.delete(key);
+ 901         }
+ 902     }
+ 903 
+ 904     private collapseColLevel() {
+ 905         if (!this.lastMatrix?.columns?.root?.children) return;
+ 906         const current = this.getDisplayedColDepth(this.lastMatrix.columns);
+ 907         if (current <= 1) return;
+ 908         const target = current - 1;
+ 909         const addAtDepth = (node: DataViewMatrixNode, depth: number, path: string[]) => {
+ 910             if (!node.children || node.children.length === 0) return;
+ 911             const label = this.nodeLabel(node);
+ 912             const key = [...path, label].filter(Boolean).join("||");
+ 913             if (depth === target) {
+ 914                 if (!this.collapsedColKeys.has(key)) this.collapsedColKeys.add(key);
+ 915                 return;
+ 916             }
+ 917             for (const ch of node.children) addAtDepth(ch, depth + 1, [...path, label]);
+ 918         };
+ 919         for (const ch of this.lastMatrix.columns.root.children) addAtDepth(ch, 1, []);
+ 920     }
+ 921 
+ 922     private expandColLevel() {
+ 923         if (this.collapsedColKeys.size === 0) return;
+ 924         let minDepth = Number.MAX_SAFE_INTEGER;
+ 925         for (const key of this.collapsedColKeys) {
+ 926             const depth = key ? key.split("||").length : 1;
+ 927             if (depth < minDepth) minDepth = depth;
+ 928         }
+ 929         for (const key of Array.from(this.collapsedColKeys)) {
+ 930             const depth = key ? key.split("||").length : 1;
+ 931             if (depth === minDepth) this.collapsedColKeys.delete(key);
+ 932         }
+ 933     }
+ 934 
+ 935     private initializeDefaultCollapsed(matrix: DataViewMatrix, enableCollapse: boolean = true) {
+ 936         if (!enableCollapse) return;
+ 937         // Collapse all column groups by default
+ 938         if (matrix.columns && matrix.columns.root) {
+ 939             const addColKeys = (node: DataViewMatrixNode, path: string[]) => {
+ 940                 const label = this.nodeLabel(node);
+ 941                 const key = [...path, label].filter(Boolean).join("||");
+ 942                 if (node.children && node.children.length) {
+ 943                     if (key) this.collapsedColKeys.add(key);
+ 944                     for (const ch of node.children) addColKeys(ch, [...path, label]);
+ 945                 }
+ 946             };
+ 947             if (matrix.columns.root.children) {
+ 948                 for (const ch of matrix.columns.root.children) addColKeys(ch, []);
+ 949             }
+ 950         }
+ 951 
+ 952         // Collapse all row groups by default
+ 953         if (matrix.rows && matrix.rows.root) {
+ 954             const addRowKeys = (node: DataViewMatrixNode, path: string[]) => {
+ 955                 const label = this.nodeLabel(node);
+ 956                 const key = [...path, label].filter(Boolean).join("||");
+ 957                 if (node.children && node.children.length) {
+ 958                     if (key) this.collapsedRowKeys.add(key);
+ 959                     for (const ch of node.children) addRowKeys(ch, [...path, label]);
+ 960                 }
+ 961             };
+ 962             if (matrix.rows.root.children) {
+ 963                 for (const ch of matrix.rows.root.children) addRowKeys(ch, []);
+ 964             }
+ 965         }
+ 966     }
+ 967 
+ 968     // no custom aggregation: collapsed groups show blank cells to avoid misrepresenting measure semantics
+ 969 
+ 970     private buildHeaderRowsFromDisplay(displayCols: DisplayCol[], depth: number): Array<Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean }>> {
+ 971         const rows: Array<Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean }>> = [];
+ 972         for (let level = 0; level < depth; level++) {
+ 973             const row: Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean }> = [];
+ 974             let i = 0;
+ 975             while (i < displayCols.length) {
+ 976                 const col = displayCols[i];
+ 977                 const label = col.kind === "leaf" ? col.labels[level] : (level < col.collapsedLevel ? col.labels[level] : (level === col.collapsedLevel ? col.labels[level] : ""));
+ 978                 const key = col.keys[level] || "";
+ 979                 const collapsed = col.kind === "collapsed" && level === col.collapsedLevel ? true : this.collapsedColKeys.has(key) && level < depth - 1;
+ 980                 const togglable = !!key && level < depth - 1;
+ 981                 let span = 1;
+ 982                 let j = i + 1;
+ 983                 while (j < displayCols.length) {
+ 984                     const nxt = displayCols[j];
+ 985                     const nLabel = nxt.kind === "leaf" ? nxt.labels[level] : (level < (nxt.collapsedLevel ?? 0) ? nxt.labels[level] : (level === (nxt.collapsedLevel ?? -1) ? nxt.labels[level] : ""));
+ 986                     const nKey = nxt.keys[level] || "";
+ 987                     const nCollapsed = nxt.kind === "collapsed" && level === (nxt.collapsedLevel ?? -1) ? true : this.collapsedColKeys.has(nKey) && level < depth - 1;
+ 988                     if (nLabel !== label || nKey !== key || nCollapsed !== collapsed) break;
+ 989                     span++; j++;
+ 990                 }
+ 991                 row.push({ label, span, key, togglable, collapsed });
+ 992                 i = j;
+ 993             }
+ 994             rows.push(row);
+ 995         }
+ 996         return rows;
+ 997     }
+ 998 
+ 999     private beginResize(e: MouseEvent, key: string) {
+1000         e.preventDefault();
+1001         const startX = e.clientX;
+1002         const startWidth = this.columnWidthPx.get(key) ?? 120;
+1003         const onMove = (ev: MouseEvent) => {
+1004             const delta = ev.clientX - startX;
+1005             const newW = Math.max(40, startWidth + delta);
+1006             this.columnWidthPx.set(key, newW);
+1007             const cols = this.colElsByKey.get(key) || [];
+1008             for (const c of cols) c.style.width = `${newW}px`;
+1009         };
+1010         const onUp = () => {
+1011             window.removeEventListener("mousemove", onMove);
+1012             window.removeEventListener("mouseup", onUp);
+1013             this.persistState();
+1014         };
+1015         window.addEventListener("mousemove", onMove);
+1016         window.addEventListener("mouseup", onUp);
+1017     }
+1018 
+1019     private getCellValueForDisplayCol(valuesMap: { [key: number]: powerbi.DataViewMatrixNodeValue }, numericKeys: number[], ref: DisplayCol, measureIndex: number, measureCount: number): any {
+1020         if (ref.kind === "leaf") {
+1021             const prefKey = ref.offset * measureCount + measureIndex;
+1022             const preferredCell = valuesMap[prefKey];
+1023             if (preferredCell && preferredCell.value != null) return preferredCell.value;
+1024             if (numericKeys.length) {
+1025                 const idx = ref.offset * measureCount + measureIndex;
+1026                 const altKey = numericKeys[idx] ?? numericKeys[idx % numericKeys.length];
+1027                 const altCell = valuesMap[altKey];
+1028                 if (altCell && altCell.value != null) return altCell.value;
+1029             }
+1030             return "";
+1031         } else {
+1032             // collapsed column group: only show value if host provided a subtotal in node.values
+1033             // Without a row context here, we cannot access column-node subtotals reliably; leave blank
+1034             return "";
+1035         }
+1036     }
+1037 
+1038     private collectLeaves(node: DataViewMatrixNode, out: DataViewMatrixNode[]) {
+1039         if (!node.children || node.children.length === 0) {
+1040             out.push(node);
+1041             return;
+1042         }
+1043         for (const child of node.children) this.collectLeaves(child, out);
+1044     }
+1045 
+1046     private collectRowLeaves(node: DataViewMatrixNode, path: string[], out: Array<{ node: DataViewMatrixNode; label: string }>) {
+1047         const label = this.nodeLabel(node);
+1048         const nextPath = label ? [...path, label] : [...path];
+1049         if (!node.children || node.children.length === 0) {
+1050             out.push({ node, label: nextPath.join(" / ") || "Total" });
+1051             return;
+1052         }
+1053         for (const child of node.children) this.collectRowLeaves(child, nextPath, out);
+1054     }
+1055 
+1056     private countLeaves(node: DataViewMatrixNode): number {
+1057         if (!node.children || node.children.length === 0) return 1;
+1058         let n = 0;
+1059         for (const child of node.children) n += this.countLeaves(child);
+1060         return n;
+1061     }
+1062 
+1063     private nodeLabel(node: DataViewMatrixNode): string {
+1064         if (node.levelValues && node.levelValues.length) {
+1065             // Prefer levelValues for matrix nodes
+1066             return String(node.levelValues.map(v => v.value).filter(v => v != null)[0] ?? "");
+1067         }
+1068         if (node.value != null) return String(node.value);
+1069         return "";
+1070     }
+1071 
+1072     private formatValue(v: any): string {
+1073         if (v == null) return "";
+1074         if (typeof v === "number") return v.toLocaleString();
+1075         return String(v);
+1076     }
+1077 }
+1078 
+1079 

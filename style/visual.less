@@ -1,0 +1,143 @@
+.ghm-container {
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+}
+
+.ghm-toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 4px 6px;
+    border-bottom: 1px solid #eee;
+    position: sticky;
+    top: 0;
+    background: #fff;
+    z-index: 6;
+}
+
+.ghm-btn {
+    font-size: 12px;
+    padding: 2px 6px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #f8f8f8;
+    cursor: pointer;
+}
+
+.ghm-btn:hover { background: #f0f0f0; }
+
+.ghm-debug {
+    position: sticky;
+    top: 0;
+    margin-left: auto;
+    margin-right: 8px;
+    font-family: monospace;
+    font-size: 11px;
+    background: rgba(0,0,0,0.05);
+    border: 1px solid #ccc;
+    padding: 4px 6px;
+    border-radius: 4px;
+    max-width: 50%;
+    white-space: pre-wrap;
+}
+
+.ghm-placeholder {
+    color: #888;
+    font-size: 12px;
+    padding: 8px;
+}
+
+.ghm-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+.ghm-table td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ghm-sticky .ghm-table thead th {
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    padding: 4px 6px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 10px; /* slightly smaller to fit */
+    line-height: 1.15;
+    white-space: normal; /* allow wrapping */
+    word-break: break-word;
+    position: sticky;
+    top: 0; /* overridden per-row inline for stacking */
+    z-index: 3;
+}
+
+.ghm-sticky .ghm-table thead th.ghm-corner {
+    min-width: 120px; /* space for row header column */
+    background: #fff;
+    left: 0;
+    position: sticky;
+    z-index: 4;
+}
+
+.ghm-sticky .ghm-table tbody th.ghm-rowheader {
+    background: #fafafa;
+    border: 1px solid #ddd;
+    text-align: left;
+    padding: 4px 6px;
+    font-weight: 600;
+    white-space: nowrap;
+    position: sticky;
+    left: 0;
+    z-index: 2;
+}
+
+.ghm-table td {
+    border: 1px solid #eee;
+    padding: 4px 6px;
+    text-align: right;
+    font-size: 11px;
+}
+
+.ghm-toggle {
+    margin-right: 6px;
+    cursor: pointer;
+}
+
+/* Column resizers */
+.ghm-sticky .ghm-resizers-row th.ghm-resizer-cell {
+    position: sticky;
+    top: 0;
+    height: 4px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    z-index: 5;
+}
+
+.ghm-resizer {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+}
+
+.ghm-resizer::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 2px;
+    width: 1px;
+    background: rgba(0,0,0,0.15);
+}
+
+.ghm-totalrow th,
+.ghm-totalrow td {
+    font-weight: 700;
+}
