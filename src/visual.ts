@@ -100,6 +100,10 @@ export class Visual implements IVisual {
     private colLevelStyles: Array<{fontFamily?: string; fontSize?: number; fontWeight?: string; italic?: boolean; underline?: boolean}> = [];
 
     private host: IVisualHost;
+    private resizeObserver: ResizeObserver | null = null;
+    private renderCtx: any = null;
+    private tbody: HTMLTableSectionElement | null = null;
+    private scrollFrame: number | null = null;
     // Totals behavior
     private showGrandTotal: boolean = true;
     private grandTotalFallback: boolean = false;
@@ -118,35 +122,31 @@ export class Visual implements IVisual {
         const btnExpand = document.createElement("button");
         btnExpand.className = "ghm-btn";
         btnExpand.textContent = "➕ Expand All";
+        btnExpand.setAttribute("aria-label", "Expand all groups");
         btnExpand.addEventListener("click", () => { this.expandAll(); this.persistState(); this.refresh(); });
-        const btnCollapse = document.createElement("button");
-        btnCollapse.className = "ghm-btn";
-        btnCollapse.textContent = "➖ Collapse All";
-        btnCollapse.addEventListener("click", () => { this.collapseAll(); this.persistState(); this.refresh(); });
-        
         const btnRowExpandLevel = document.createElement("button");
         btnRowExpandLevel.className = "ghm-btn";
-        btnRowExpandLevel.textContent = "+𝄘";
         btnRowExpandLevel.title = "Expand Row Level";
+        btnRowExpandLevel.setAttribute("aria-label", "Expand row hierarchy one level");
         btnRowExpandLevel.addEventListener("click", () => { this.expandRowLevel(); this.persistState(); this.refresh(); });
         // Use requested glyph-only label
         btnRowExpandLevel.textContent = "+ 𝄘";
         const btnRowCollapseLevel = document.createElement("button");
         btnRowCollapseLevel.className = "ghm-btn";
-        btnRowCollapseLevel.textContent = "−𝄘";
         btnRowCollapseLevel.title = "Collapse Row Level";
+        btnRowCollapseLevel.setAttribute("aria-label", "Collapse row hierarchy one level");
         btnRowCollapseLevel.addEventListener("click", () => { this.collapseRowLevel(); this.persistState(); this.refresh(); });
         btnRowCollapseLevel.textContent = "- 𝄘";
         const btnColExpandLevel = document.createElement("button");
         btnColExpandLevel.className = "ghm-btn";
-        btnColExpandLevel.textContent = "+⦀";
         btnColExpandLevel.title = "Expand Column Level";
+        btnColExpandLevel.setAttribute("aria-label", "Expand column hierarchy one level");
         btnColExpandLevel.addEventListener("click", () => { this.expandColLevel(); this.persistState(); this.refresh(); });
         btnColExpandLevel.textContent = "+ ⦀";
         const btnColCollapseLevel = document.createElement("button");
         btnColCollapseLevel.className = "ghm-btn";
-        btnColCollapseLevel.textContent = "−⦀";
         btnColCollapseLevel.title = "Collapse Column Level";
+        btnColCollapseLevel.setAttribute("aria-label", "Collapse column hierarchy one level");
         btnColCollapseLevel.addEventListener("click", () => { this.collapseColLevel(); this.persistState(); this.refresh(); });
         btnColCollapseLevel.textContent = "- ⦀";
         const lblRepeat = document.createElement("label");
@@ -183,6 +183,7 @@ export class Visual implements IVisual {
         btnCollapseAll.className = "ghm-btn";
         btnCollapseAll.textContent = "- All";
         btnCollapseAll.title = "Collapse All";
+        btnCollapseAll.setAttribute("aria-label", "Collapse all groups");
         btnCollapseAll.addEventListener("click", () => { this.collapseAll(); this.persistState(); this.refresh(); });
         btnExpand.textContent = "+ All";
         btnExpand.title = "Expand All";
@@ -211,6 +212,14 @@ export class Visual implements IVisual {
         this.debugEl.style.display = "none";
         this.container.appendChild(this.debugEl);
         options.element.appendChild(this.container);
+
+        this.container.addEventListener("scroll", () => {
+            if (this.scrollFrame) return;
+            this.scrollFrame = requestAnimationFrame(() => {
+                this.scrollFrame = null;
+                this.renderBody();
+            });
+        });
     }
 
     public update(options: VisualUpdateOptions) {
@@ -494,12 +503,22 @@ export class Visual implements IVisual {
                     const toggle = document.createElement("span");
                     toggle.className = "ghm-toggle";
                     toggle.textContent = cell.collapsed ? "+" : "−";
-                    toggle.addEventListener("click", (ev) => {
+                    toggle.setAttribute("role", "button");
+                    toggle.setAttribute("aria-label", cell.collapsed ? "Expand column group" : "Collapse column group");
+                    toggle.tabIndex = 0;
+                    const handler = (ev: Event) => {
                         ev.stopPropagation();
                         if (cell.collapsed) this.collapsedColKeys.delete(cell.key);
                         else this.collapsedColKeys.add(cell.key);
                         this.persistState();
                         this.refresh();
+                    };
+                    toggle.addEventListener("click", handler);
+                    toggle.addEventListener("keydown", (e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            handler(e);
+                        }
                     });
                     th.appendChild(toggle);
                 }
@@ -594,112 +613,199 @@ export class Visual implements IVisual {
         // exclusively by collectOutlineRowsWithTotals() below. This avoids any
         // chance of duplicating the total row.
 
-        // Build body rows
+        this.renderCtx = {
+            rows,
+            outlineRows: [],
+            rowDepth,
+            visibleRowDepth,
+            rowHeaderCols,
+            columnLeaves,
+            colLeafCount,
+            displayMeasureCount,
+            totalCountForKeys,
+            resolveMeasureIndex,
+            isSingleRow: false
+        };
+        this.tbody = tbody;
+
         if (rows && rows.root && rows.root.children && rows.root.children.length) {
-            const outlineRows = this.collectOutlineRowsWithTotals(rows.root, rowDepth);
-            // Drop any empty-label total rows (synthetic duplicates) and deduplicate Grand Total if needed
-            const prunedRows = outlineRows.filter(r => {
-                const lbls = (r as any).labels as string[] | undefined;
-                const isGT = (r as any).isTotal && lbls && lbls[0] === "Grand Total";
-                const allEmpty = !isGT && (r as any).isTotal && (!lbls || lbls.every(l => !l));
-                return !allEmpty;
-            });
-            const gtRows: typeof prunedRows = [];
-            const otherRows: typeof prunedRows = [];
-            for (const r of prunedRows) {
-                const isGT = (r as any).isTotal && r.labels && r.labels[0] === "Grand Total";
-                if (isGT) gtRows.push(r); else otherRows.push(r);
-            }
-            const gt = gtRows.length ? [gtRows[0]] : [];
-        const filteredRows = (this.grandTotalPosition === "Top")
-            ? gt.concat(otherRows)
-            : otherRows.concat(gt);
-        const lastShownRowLabels: Array<string | null> = new Array(rowDepth).fill(null);
-        let bodyRowIndex = 0;
-            for (const rowInfoRaw of filteredRows) {
-                // When Repeat Labels is off, keep only the leaf label visible
-                // (the last populated level) for non-total rows.
-                const rowInfo = { ...rowInfoRaw } as any;
-                // Precompute row-level style from style measures, if present
-                const valuesMapForRow = (rowInfo as any).valuesMap || {} as any;
-                const rowMeasureBg = this.getRowMeasureBg(valuesMapForRow as any, totalCountForKeys);
-                let labelsToUse: string[] = rowInfo.labels as string[];
-                if (!this.compactLayout && !this.repeatLabels && !rowInfo.isTotal && this.rowSubtotalsEnabled) {
-                    if (this.rowSubtotalPosition === "Bottom") {
-                        // Show each higher-level label once per group when totals are at the bottom
-                        const newLabels = new Array(rowDepth).fill("");
-                        for (let lvl = 0; lvl < rowDepth; lvl++) {
-                            const lbl = (rowInfo.labels && rowInfo.labels[lvl]) ? rowInfo.labels[lvl] : "";
-                            if (!lbl) { newLabels[lvl] = ""; continue; }
-                            if (lastShownRowLabels[lvl] === lbl) {
-                                newLabels[lvl] = "";
-                            } else {
-                                newLabels[lvl] = lbl;
-                                lastShownRowLabels[lvl] = lbl;
-                                for (let deeper = lvl + 1; deeper < rowDepth; deeper++) lastShownRowLabels[deeper] = null;
-                            }
-                        }
-                        labelsToUse = newLabels;
-                    } else {
-                        const newLabels = new Array(rowDepth).fill("");
-                        let lastIdx = -1;
-                        for (let i = rowDepth - 1; i >= 0; i--) { if (rowInfo.labels && rowInfo.labels[i]) { lastIdx = i; break; } }
-                        if (lastIdx >= 0) newLabels[lastIdx] = rowInfo.labels[lastIdx];
-                        labelsToUse = newLabels;
+            this.renderCtx.outlineRows = this.collectOutlineRowsWithTotals(rows.root, rowDepth);
+        } else {
+            this.renderCtx.isSingleRow = true;
+        }
+
+        this.renderBody();
+
+        table.appendChild(colgroup);
+        table.appendChild(thead);
+        table.appendChild(tbody);
+        this.contentHost.appendChild(table);
+        this.applyStickyOffsets(thead);
+        this.updateDebugOverlay({ table, headerRows, measureCount: displayMeasureCount, columnLeaves, rowDepth, colDepth });
+    }
+
+    private renderBody() {
+        if (!this.renderCtx || !this.tbody) return;
+        const ctx = this.renderCtx;
+        const tbody = this.tbody;
+
+        while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+
+        if (ctx.isSingleRow) {
+            const tr = document.createElement("tr");
+            const rows = ctx.rows;
+            const valuesMap = rows && rows.root ? rows.root.values || {} : {};
+            const numericKeys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a, b) => a - b);
+
+            for (let c = 0; c < ctx.colLeafCount; c++) {
+                for (let m = 0; m < ctx.displayMeasureCount; m++) {
+                    const globalM = ctx.resolveMeasureIndex(ctx.columnLeaves[c], m);
+                    const td = document.createElement("td");
+                    const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, ctx.columnLeaves[c], globalM, ctx.totalCountForKeys);
+                    td.textContent = this.formatValueByMeasure(v, globalM);
+                    this.applyCellConditionalStyle(td, valuesMap as any, ctx.columnLeaves[c], globalM, ctx.totalCountForKeys);
+                    if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
+                    if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
+                    if (this.dataBold) td.style.fontWeight = "bold";
+                    if (this.cellColor) td.style.color = this.cellColor;
+
+                    let baseBg = "";
+                    if (this.zebraColEnabled) {
+                        const colIdx = c * ctx.displayMeasureCount + m;
+                        baseBg = (colIdx % 2 === 0) ? this.zebraColEvenColor : this.zebraColOddColor;
                     }
+                    if (!baseBg && this.cellBg) baseBg = this.cellBg;
+                    if (baseBg) td.style.backgroundColor = baseBg;
+                    this.applyGridBorder(td, false);
+                    tr.appendChild(td);
+                }
+            }
+            tbody.appendChild(tr);
+            return;
+        }
+
+        const outlineRows = ctx.outlineRows;
+        const totalRows = outlineRows.length;
+        if (totalRows === 0) return;
+
+        const rowHeight = (this.dataFontSize || 11) + 14;
+        const scrollTop = this.container.scrollTop;
+        const viewportHeight = this.container.clientHeight || 600;
+
+        let startIndex = Math.floor(scrollTop / rowHeight);
+        let count = Math.ceil(viewportHeight / rowHeight) + 10;
+
+        if (startIndex < 0) startIndex = 0;
+        if (startIndex >= totalRows) startIndex = totalRows - 1;
+        if (startIndex + count > totalRows) count = totalRows - startIndex;
+
+        if (startIndex > 0) {
+            const tr = document.createElement("tr");
+            tr.style.height = `${startIndex * rowHeight}px`;
+            tbody.appendChild(tr);
+        }
+
+        const lastShownRowLabels: Array<string | null> = new Array(ctx.rowDepth).fill(null);
+        if (startIndex > 0) {
+            const prev = outlineRows[startIndex - 1];
+            if (prev.labels) {
+                for (let i = 0; i < ctx.rowDepth; i++) lastShownRowLabels[i] = prev.labels[i];
+            }
+        }
+
+        let bodyRowIndex = startIndex;
+        for (let i = 0; i < count; i++) {
+            const rowInfoRaw = outlineRows[startIndex + i];
+            const rowInfo = { ...rowInfoRaw } as any;
+            const valuesMapForRow = (rowInfo as any).valuesMap || {} as any;
+            const rowMeasureBg = this.getRowMeasureBg(valuesMapForRow as any, ctx.totalCountForKeys);
+            let labelsToUse: string[] = rowInfo.labels as string[];
+
+            if (!this.compactLayout && !this.repeatLabels && !rowInfo.isTotal && this.rowSubtotalsEnabled) {
+                if (this.rowSubtotalPosition === "Bottom") {
+                    const newLabels = new Array(ctx.rowDepth).fill("");
+                    for (let lvl = 0; lvl < ctx.rowDepth; lvl++) {
+                        const lbl = (rowInfo.labels && rowInfo.labels[lvl]) ? rowInfo.labels[lvl] : "";
+                        if (!lbl) { newLabels[lvl] = ""; continue; }
+                        if (lastShownRowLabels[lvl] === lbl) {
+                            newLabels[lvl] = "";
+                        } else {
+                            newLabels[lvl] = lbl;
+                            lastShownRowLabels[lvl] = lbl;
+                            for (let deeper = lvl + 1; deeper < ctx.rowDepth; deeper++) lastShownRowLabels[deeper] = null;
+                        }
+                    }
+                    labelsToUse = newLabels;
+                } else {
+                    const newLabels = new Array(ctx.rowDepth).fill("");
+                    let lastIdx = -1;
+                    for (let k = ctx.rowDepth - 1; k >= 0; k--) { if (rowInfo.labels && rowInfo.labels[k]) { lastIdx = k; break; } }
+                    if (lastIdx >= 0) newLabels[lastIdx] = rowInfo.labels[lastIdx];
+                    labelsToUse = newLabels;
+                }
             }
             if (rowInfo.isTotal) {
-                // Reset tracking so the next group's first row shows its labels
-                for (let i = 0; i < lastShownRowLabels.length; i++) lastShownRowLabels[i] = null;
+                for (let k = 0; k < lastShownRowLabels.length; k++) lastShownRowLabels[k] = null;
             }
+
             const tr = document.createElement("tr");
-                if ((rowInfo as any).isTotal) tr.className = "ghm-totalrow";
-                if (this.zebraEnabled && !rowInfo.isTotal) {
-                    const zebraColor = (bodyRowIndex % 2 === 0) ? this.zebraEvenColor : this.zebraOddColor;
-                    if (!rowMeasureBg && zebraColor) tr.style.backgroundColor = zebraColor;
-                }
-                const rowStyleBg = rowMeasureBg || this.rowHeaderBg || "";
-                const rowStyleColor = this.rowHeaderColor || "";
-            if (rowHeaderCols > 0) {
+            tr.style.height = `${rowHeight}px`;
+            if ((rowInfo as any).isTotal) tr.className = "ghm-totalrow";
+            if (this.zebraEnabled && !rowInfo.isTotal) {
+                const zebraColor = (bodyRowIndex % 2 === 0) ? this.zebraEvenColor : this.zebraOddColor;
+                if (!rowMeasureBg && zebraColor) tr.style.backgroundColor = zebraColor;
+            }
+            const rowStyleBg = rowMeasureBg || this.rowHeaderBg || "";
+            const rowStyleColor = this.rowHeaderColor || "";
+
+            if (ctx.rowHeaderCols > 0) {
                 if (this.compactLayout) {
                     const th = document.createElement("th");
                     th.className = "ghm-rowheader";
-                    // deepest available label
                     let txt = "";
                     let lastIdx = -1;
-                    for (let i = rowDepth - 1; i >= 0; i--) { if (labelsToUse && labelsToUse[i]) { txt = labelsToUse[i]; lastIdx = i; break; } }
+                    for (let k = ctx.rowDepth - 1; k >= 0; k--) { if (labelsToUse && labelsToUse[k]) { txt = labelsToUse[k]; lastIdx = k; break; } }
                     th.textContent = txt || "";
-                this.applyRowHeaderStyle(th, 0);
-                if (rowStyleBg) th.style.backgroundColor = rowStyleBg;
-                if (rowStyleColor) th.style.color = rowStyleColor;
-                this.applyGridBorder(th, true);
-                    // Indentation according to depth in compact layout
+                    this.applyRowHeaderStyle(th, 0);
+                    if (rowStyleBg) th.style.backgroundColor = rowStyleBg;
+                    if (rowStyleColor) th.style.color = rowStyleColor;
+                    this.applyGridBorder(th, true);
                     const depthIndent = (rowInfo as any).isTotal && (rowInfo as any).depth !== undefined
-                        ? Math.max(0, Math.min(rowDepth - 1, (rowInfo as any).depth))
+                        ? Math.max(0, Math.min(ctx.rowDepth - 1, (rowInfo as any).depth))
                         : Math.max(0, lastIdx);
                     const basePad = 8, step = 14;
-                        th.style.paddingLeft = `${basePad + step * depthIndent}px`;
-                        if ((rowInfo as any).isTotal && (rowInfo as any).toggleKey) {
-                            const toggle = document.createElement("span");
-                            toggle.className = "ghm-toggle";
-                            const collapsed = !!(rowInfo as any).collapsed;
-                            toggle.textContent = collapsed ? "+" : "-";
-                            toggle.title = collapsed ? "Expand group" : "Collapse group";
-                            (toggle as any).style.marginRight = "6px";
-                            toggle.addEventListener("click", (ev) => {
-                                ev.stopPropagation();
-                                const key = String((rowInfo as any).toggleKey);
-                                if (collapsed) this.collapsedRowKeys.delete(key); else this.collapsedRowKeys.add(key);
+                    th.style.paddingLeft = `${basePad + step * depthIndent}px`;
+                    if ((rowInfo as any).isTotal && (rowInfo as any).toggleKey) {
+                        const toggle = document.createElement("span");
+                        toggle.className = "ghm-toggle";
+                        const collapsed = !!(rowInfo as any).collapsed;
+                        toggle.textContent = collapsed ? "+" : "-";
+                        toggle.title = collapsed ? "Expand group" : "Collapse group";
+                        toggle.setAttribute("role", "button");
+                        toggle.setAttribute("aria-label", collapsed ? "Expand row group" : "Collapse row group");
+                        toggle.tabIndex = 0;
+                        (toggle as any).style.marginRight = "6px";
+                        const handler = (ev: Event) => {
+                            ev.stopPropagation();
+                            const key = String((rowInfo as any).toggleKey);
+                            if (collapsed) this.collapsedRowKeys.delete(key); else this.collapsedRowKeys.add(key);
                             this.persistState();
                             this.refresh();
+                        };
+                        toggle.addEventListener("click", handler);
+                        toggle.addEventListener("keydown", (e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                handler(e);
+                            }
                         });
                         th.prepend(toggle);
                     }
                     if (this.rowHeaderBg) th.style.backgroundColor = this.rowHeaderBg;
                     tr.appendChild(th);
                 } else {
-                    const toggleLevel = Math.max(0, Math.min(rowHeaderCols - 1, (rowInfo as any).depth ?? 0));
-                    for (let lvl = 0; lvl < rowHeaderCols; lvl++) {
+                    const toggleLevel = Math.max(0, Math.min(ctx.rowHeaderCols - 1, (rowInfo as any).depth ?? 0));
+                    for (let lvl = 0; lvl < ctx.rowHeaderCols; lvl++) {
                         const th = document.createElement("th");
                         th.className = "ghm-rowheader";
                         th.textContent = (labelsToUse && labelsToUse[lvl]) || "";
@@ -708,42 +814,52 @@ export class Visual implements IVisual {
                         if (rowStyleColor) th.style.color = rowStyleColor;
                         if (this.rowHeaderBg) th.style.backgroundColor = this.rowHeaderBg;
                         this.applyGridBorder(th, true);
-                            // Place +/- toggle on the appropriate visible level
-                            if ((rowInfo as any).isTotal && (rowInfo as any).toggleKey && lvl === toggleLevel) {
-                                const toggle = document.createElement("span");
-                                toggle.className = "ghm-toggle";
-                                const collapsed = !!(rowInfo as any).collapsed;
-                                toggle.textContent = collapsed ? "+" : "-";
-                                toggle.title = collapsed ? "Expand group" : "Collapse group";
-                                toggle.addEventListener("click", (ev) => {
-                                    ev.stopPropagation();
-                                    const key = String((rowInfo as any).toggleKey);
-                                    if (collapsed) this.collapsedRowKeys.delete(key); else this.collapsedRowKeys.add(key);
-                                    this.persistState();
-                                    this.refresh();
-                                });
-                                th.prepend(toggle);
-                            }
-                            tr.appendChild(th);
+                        if ((rowInfo as any).isTotal && (rowInfo as any).toggleKey && lvl === toggleLevel) {
+                            const toggle = document.createElement("span");
+                            toggle.className = "ghm-toggle";
+                            const collapsed = !!(rowInfo as any).collapsed;
+                            toggle.textContent = collapsed ? "+" : "-";
+                            toggle.title = collapsed ? "Expand group" : "Collapse group";
+                            toggle.setAttribute("role", "button");
+                            toggle.setAttribute("aria-label", collapsed ? "Expand row group" : "Collapse row group");
+                            toggle.tabIndex = 0;
+                            const handler = (ev: Event) => {
+                                ev.stopPropagation();
+                                const key = String((rowInfo as any).toggleKey);
+                                if (collapsed) this.collapsedRowKeys.delete(key); else this.collapsedRowKeys.add(key);
+                                this.persistState();
+                                this.refresh();
+                            };
+                            toggle.addEventListener("click", handler);
+                            toggle.addEventListener("keydown", (e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    handler(e);
+                                }
+                            });
+                            th.prepend(toggle);
                         }
+                        tr.appendChild(th);
                     }
                 }
-                const valuesMap = (rowInfo as any).valuesMap || {} as any;
-                const numericKeys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a,b)=>a-b);
-                for (let c = 0; c < colLeafCount; c++) {
-                    for (let m = 0; m < displayMeasureCount; m++) {
-                        const globalM = resolveMeasureIndex(columnLeaves[c], m);
+            }
+
+            const valuesMap = (rowInfo as any).valuesMap || {} as any;
+            const numericKeys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a,b)=>a-b);
+            for (let c = 0; c < ctx.colLeafCount; c++) {
+                for (let m = 0; m < ctx.displayMeasureCount; m++) {
+                    const globalM = ctx.resolveMeasureIndex(ctx.columnLeaves[c], m);
                     const td = document.createElement("td");
-                    const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], globalM, totalCountForKeys);
+                    const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, ctx.columnLeaves[c], globalM, ctx.totalCountForKeys);
                     td.textContent = this.formatValueByMeasure(v, globalM);
-                    this.applyCellConditionalStyle(td, valuesMap as any, columnLeaves[c], globalM, totalCountForKeys);
+                    this.applyCellConditionalStyle(td, valuesMap as any, ctx.columnLeaves[c], globalM, ctx.totalCountForKeys);
                     if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
                     if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
                     if (this.dataBold) td.style.fontWeight = "bold";
                     if (this.cellColor) td.style.color = this.cellColor;
                     let baseBg = "";
                     if (this.zebraColEnabled) {
-                        const colIdx = c * displayMeasureCount + m;
+                        const colIdx = c * ctx.displayMeasureCount + m;
                         baseBg = (colIdx % 2 === 0) ? this.zebraColEvenColor : this.zebraColOddColor;
                     }
                     if (!baseBg && this.cellBg) baseBg = this.cellBg;
@@ -753,46 +869,15 @@ export class Visual implements IVisual {
                 }
             }
             tbody.appendChild(tr);
-                bodyRowIndex++;
-            }
-        } else {
-            // No row groups - single total row
-            const tr = document.createElement("tr");
-            // Data cells
-            const valuesMap = rows && rows.root ? rows.root.values || {} : {};
-            const numericKeys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a, b) => a - b);
-            for (let c = 0; c < colLeafCount; c++) {
-                for (let m = 0; m < displayMeasureCount; m++) {
-                    const globalM = resolveMeasureIndex(columnLeaves[c], m);
-                    const td = document.createElement("td");
-                    const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], globalM, totalCountForKeys);
-                    td.textContent = this.formatValueByMeasure(v, globalM);
-                    this.applyCellConditionalStyle(td, valuesMap as any, columnLeaves[c], globalM, totalCountForKeys);
-                    if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
-                    if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
-                    if (this.dataBold) td.style.fontWeight = "bold";
-                    if (this.cellColor) td.style.color = this.cellColor;
-                    // Base background: zebra columns or global cellBg
-                    let baseBg = "";
-                    if (this.zebraColEnabled) {
-                        const colIdx = c * displayMeasureCount + m;
-                        baseBg = (colIdx % 2 === 0) ? this.zebraColEvenColor : this.zebraColOddColor;
-                    }
-                    if (!baseBg && this.cellBg) baseBg = this.cellBg;
-                    if (baseBg) td.style.backgroundColor = baseBg;
-                    this.applyGridBorder(td, false);
-                    tr.appendChild(td);
-                }
-            }
-            tbody.appendChild(tr);
+            bodyRowIndex++;
         }
 
-        table.appendChild(colgroup);
-        table.appendChild(thead);
-        table.appendChild(tbody);
-        this.contentHost.appendChild(table);
-        this.applyStickyOffsets(thead);
-        this.updateDebugOverlay({ table, headerRows, measureCount: displayMeasureCount, columnLeaves, rowDepth, colDepth });
+        const remaining = totalRows - (startIndex + count);
+        if (remaining > 0) {
+            const tr = document.createElement("tr");
+            tr.style.height = `${remaining * rowHeight}px`;
+            tbody.appendChild(tr);
+        }
     }
 
     private computeDisplayColumns(root: DataViewMatrixNode, depth: number): DisplayCol[] {
@@ -892,175 +977,6 @@ export class Visual implements IVisual {
         return depthFrom(columns.root);
     }
 
-    private renderRowGroup(node: DataViewMatrixNode, depth: number, parentKey: string, columnLeaves: DisplayCol[], measureCount: number, totalMeasureCount: number, resolveMeasureIndex: (ref: DisplayCol, displayIdx: number) => number): HTMLTableRowElement[] {
-        // Skip the artificial root and render its children
-        if (node.level === undefined && node.children && node.children.length) {
-            let all: HTMLTableRowElement[] = [];
-            for (const child of node.children) {
-                all = all.concat(this.renderRowGroup(child, 0, parentKey, columnLeaves, measureCount, totalMeasureCount, resolveMeasureIndex));
-            }
-            return all;
-        }
-
-        if (node.children && node.children.length) {
-            let rows: HTMLTableRowElement[] = [];
-            const label = this.nodeLabel(node) || "Total";
-            const thisKey = [parentKey, label].filter(Boolean).join("||");
-            const collapsed = this.collapsedRowKeys.has(thisKey);
-            if (collapsed) {
-                // Render a single group row with group aggregates
-                const tr = document.createElement("tr");
-                const th = document.createElement("th");
-                th.className = "ghm-rowheader";
-                th.title = label;
-                const toggle = document.createElement("span");
-                toggle.className = "ghm-toggle";
-                toggle.textContent = "+";
-                toggle.addEventListener("click", (ev) => {
-                    ev.stopPropagation();
-                    this.collapsedRowKeys.delete(thisKey);
-                    this.persistState();
-                    this.refresh();
-                });
-                th.appendChild(toggle);
-                const txt = document.createElement("span");
-                txt.textContent = label;
-                if (this.rowHeaderFontSize) txt.style.fontSize = `${this.rowHeaderFontSize}px`;
-                if (this.rowHeaderFontFamily) txt.style.fontFamily = this.rowHeaderFontFamily;
-                th.appendChild(txt);
-                tr.appendChild(th);
-                // fill remaining row header columns (collapsed depths)
-                const visDepth = this.repeatLabels ? this.getRowDepth(this.lastMatrix?.rows) : this.getDisplayedRowDepth(this.lastMatrix?.rows);
-                    for (let k = 1; k < visDepth; k++) {
-                        const thFill = document.createElement("th");
-                        thFill.className = "ghm-rowheader";
-                        this.applyRowHeaderStyle(thFill, k);
-                        tr.appendChild(thFill);
-                    }
-                const totalCountLocal = (this.lastMatrix?.valueSources?.length) || totalMeasureCount || measureCount || 1;
-                for (let c = 0; c < columnLeaves.length; c++) {
-                    for (let m = 0; m < measureCount; m++) {
-                        const globalM = resolveMeasureIndex(columnLeaves[c], m);
-                        const td = document.createElement("td");
-                        const v = this.getCollapsedRowGroupValue(node, columnLeaves[c], globalM, totalCountLocal);
-                        td.textContent = this.formatValueByMeasure(v, globalM);
-                        const valuesMapNode = (node.values || {}) as any;
-                        this.applyCellConditionalStyle(td, valuesMapNode, columnLeaves[c], globalM, totalCountLocal);
-                        if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
-                        if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
-                        if (this.dataBold) td.style.fontWeight = "bold";
-                        if (this.cellColor) td.style.color = this.cellColor;
-                        if (this.cellBg) td.style.backgroundColor = this.cellBg;
-                        tr.appendChild(td);
-                    }
-                }
-                return [tr];
-            } else {
-                const normalChildren = node.children.filter(ch => !(ch as any).isSubtotal);
-                const subtotalChild = node.children.find(ch => (ch as any).isSubtotal);
-                for (const child of normalChildren) {
-                    rows = rows.concat(this.renderRowGroup(child, depth + 1, thisKey, columnLeaves, measureCount, totalMeasureCount, resolveMeasureIndex));
-                }
-                if (subtotalChild) {
-                    const totalDepth = this.getRowDepth(this.lastMatrix?.rows);
-                    const trTotal = document.createElement("tr");
-                    trTotal.className = "ghm-totalrow";
-                    // Do not emit TH at current group depth since the row-spanning group header occupies that column across this block
-                    for (let i = 0; i < totalDepth; i++) {
-                        if (i === depth) continue;
-                        const thFill = document.createElement("th");
-                        thFill.className = "ghm-rowheader";
-                        this.applyRowHeaderStyle(thFill, i);
-                        trTotal.appendChild(thFill);
-                    }
-                    const valuesMap = (subtotalChild.values || {}) as any;
-                    const totalCountLocal2 = (this.lastMatrix?.valueSources?.length) || totalMeasureCount || measureCount || 1;
-                    for (let c = 0; c < columnLeaves.length; c++) {
-                        for (let m = 0; m < measureCount; m++) {
-                            const globalM = resolveMeasureIndex(columnLeaves[c], m);
-                            const td = document.createElement("td");
-                            td.textContent = this.formatValueByMeasure(this.getValueFromMapForDisplayCol(valuesMap, columnLeaves[c], globalM, totalCountLocal2), globalM);
-                            this.applyCellConditionalStyle(td, valuesMap as any, columnLeaves[c], globalM, totalCountLocal2);
-                            if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
-                            if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
-                            if (this.dataBold) td.style.fontWeight = "bold";
-                            if (this.cellColor) td.style.color = this.cellColor;
-                            if (this.cellBg) td.style.backgroundColor = this.cellBg;
-                            trTotal.appendChild(td);
-                        }
-                    }
-                    // Place subtotal row at the top of the group's block so totals are shown first
-                    rows.unshift(trTotal);
-                }
-                if (rows.length > 0) {
-                    const th = document.createElement("th");
-                    th.className = "ghm-rowheader";
-                    th.title = label;
-                    const toggle = document.createElement("span");
-                    toggle.className = "ghm-toggle";
-                    toggle.textContent = "−";
-                    toggle.addEventListener("click", (ev) => {
-                        ev.stopPropagation();
-                        this.collapsedRowKeys.add(thisKey);
-                        this.persistState();
-                        this.refresh();
-                    });
-                    th.appendChild(toggle);
-                    const txt = document.createElement("span");
-                    txt.textContent = label;
-                    this.applyRowHeaderStyle(txt, depth);
-                    th.appendChild(txt);
-                    th.rowSpan = rows.length;
-                    // Ensure the first row in the group has TH placeholders up to the target depth
-                    const totalDepth = this.getRowDepth(this.lastMatrix?.rows);
-                    let headerCells = Array.from(rows[0].querySelectorAll('th')) as HTMLElement[];
-                    // If there are fewer than 'depth' header cells, prepend blanks until we can insert at the correct index
-                    while (headerCells.length < Math.min(depth, totalDepth)) {
-                        const pad = document.createElement("th");
-                        pad.className = "ghm-rowheader";
-                        this.applyRowHeaderStyle(pad, headerCells.length);
-                        rows[0].insertBefore(pad, headerCells[0] || null);
-                        headerCells = Array.from(rows[0].querySelectorAll('th')) as HTMLElement[];
-                    }
-                    const targetIndex = Math.min(depth, headerCells.length);
-                    const refNode = headerCells[targetIndex] || null;
-                    rows[0].insertBefore(th, refNode);
-                }
-                return rows;
-            }
-        }
-
-        // Leaf row: create a row, add deepest-level header, then data cells
-        const tr = document.createElement("tr");
-            const th = document.createElement("th");
-            th.className = "ghm-rowheader";
-            th.textContent = this.nodeLabel(node) || "";
-            th.rowSpan = 1;
-            this.applyRowHeaderStyle(th, depth);
-            tr.appendChild(th);
-
-        // Add placeholder THs for any deeper hidden levels to keep column alignment (total columns = rowDepth)
-        const totalDepth = this.getRowDepth(this.lastMatrix?.rows);
-        for (let d = depth + 1; d < totalDepth; d++) {
-            const ph = document.createElement("th");
-            ph.className = "ghm-rowheader";
-            this.applyRowHeaderStyle(ph, d);
-            tr.appendChild(ph);
-        }
-
-        const valuesMap = node.values || {};
-        const numericKeys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a, b) => a - b);
-        for (let c = 0; c < columnLeaves.length; c++) {
-            for (let m = 0; m < measureCount; m++) {
-                const td = document.createElement("td");
-                const globalM = resolveMeasureIndex(columnLeaves[c], m);
-                const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], globalM, totalMeasureCount || 1);
-                td.textContent = this.formatValueByMeasure(v, globalM);
-                tr.appendChild(td);
-            }
-        }
-        return [tr];
-    }
 
     private refresh() {
         // Re-render using the last received matrix
@@ -1069,26 +985,36 @@ export class Visual implements IVisual {
     }
 
     private applyStickyOffsets(thead: HTMLTableSectionElement) {
+        if (this.resizeObserver) {
+            this.resizeObserver.disconnect();
+            this.resizeObserver = null;
+        }
+
         if (!this.container.classList.contains("ghm-sticky")) return;
 
         const compute = () => {
             const rows = Array.from(thead.rows);
-            // If first row has no height yet, try again on next frame
-            const firstH = rows[0] ? (rows[0].offsetHeight || rows[0].getBoundingClientRect().height) : 0;
-            if (!firstH) {
-                requestAnimationFrame(compute);
-                return;
-            }
+            if (rows.length === 0) return;
+
             let top = 0;
             for (const tr of rows) {
-                const h = tr.offsetHeight || tr.getBoundingClientRect().height || 0;
+                const rect = tr.getBoundingClientRect();
+                const h = rect.height;
                 const cells = Array.from(tr.cells) as HTMLElement[];
-                for (const cell of cells) (cell as HTMLElement).style.top = `${top}px`;
+                for (const cell of cells) {
+                    cell.style.top = `${top}px`;
+                }
                 top += h;
             }
         };
+
+        // Compute initially
         requestAnimationFrame(compute);
-        window.addEventListener("resize", () => requestAnimationFrame(compute), { once: true });
+
+        // Compute on resize
+        this.resizeObserver = new ResizeObserver(() => requestAnimationFrame(compute));
+        this.resizeObserver.observe(thead);
+        for (const r of Array.from(thead.rows)) this.resizeObserver.observe(r);
     }
 
     private persistState() {
@@ -1245,27 +1171,6 @@ export class Visual implements IVisual {
         }
     }
 
-    private computeRowInfo(rows: powerbi.DataViewHierarchy | undefined, rowDepth: number): { count: number } {
-        if (!rows || !rows.root) return { count: 0 };
-        if (this.repeatLabels) {
-            const flat = this.collectDisplayRowsRepeat(rows.root, rowDepth);
-            return { count: flat.length };
-        }
-        const countFrom = (node: DataViewMatrixNode, parentKey: string): number => {
-            if (node.level === undefined && node.children && node.children.length) {
-                let total = 0; for (const ch of node.children) total += countFrom(ch, ''); return total;
-            }
-            const label = this.nodeLabel(node);
-            const key = [parentKey, label].filter(Boolean).join('||');
-            if (node.children && node.children.length) {
-                if (this.collapsedRowKeys.has(key)) return 1;
-                let total = 0; for (const ch of node.children) total += countFrom(ch, key); return total;
-            }
-            return 1;
-        };
-        return { count: countFrom(rows.root, '') };
-    }
-
     private getCollapsedRowGroupValue(node: DataViewMatrixNode, ref: DisplayCol, measureIndex: number, measureCount: number): any {
         // Prefer host-provided row subtotal on the collapsed node itself
         const tryFromNodeValues = (): any => {
@@ -1316,37 +1221,6 @@ export class Visual implements IVisual {
             if ((ch as any).isSubtotal) return ch;
         }
         return null;
-    }
-
-    private aggregateAcrossRowLeaves(node: DataViewMatrixNode, ref: DisplayCol, measureIndex: number, measureCount: number): { sum: number | null; first: any } {
-        let sum: number | null = null;
-        let first: any = null;
-        const visit = (n: DataViewMatrixNode) => {
-            if (!n.children || n.children.length === 0) {
-                const valuesMap = (n.values || {}) as any;
-                if (ref.kind === "leaf") {
-                    const key = ref.offset * measureCount + measureIndex;
-                    const cell = valuesMap[key];
-                    if (cell && cell.value != null) {
-                        if (typeof cell.value === "number") sum = (sum ?? 0) + (cell.value as number);
-                        else if (first === null) first = cell.value;
-                    }
-                } else {
-                    for (let off = ref.start; off <= ref.end; off++) {
-                        const key = off * measureCount + measureIndex;
-                        const cell = valuesMap[key];
-                        if (cell && cell.value != null) {
-                            if (typeof cell.value === "number") sum = (sum ?? 0) + (cell.value as number);
-                            else if (first === null) first = cell.value;
-                        }
-                    }
-                }
-                return;
-            }
-            for (const ch of n.children) visit(ch);
-        };
-        visit(node);
-        return { sum, first };
     }
 
     private getVisibleRowDepth(rows: powerbi.DataViewHierarchy | undefined, maxDepth: number): number {
@@ -1730,31 +1604,6 @@ export class Visual implements IVisual {
         }
     }
 
-    private collectLeaves(node: DataViewMatrixNode, out: DataViewMatrixNode[]) {
-        if (!node.children || node.children.length === 0) {
-            out.push(node);
-            return;
-        }
-        for (const child of node.children) this.collectLeaves(child, out);
-    }
-
-    private collectRowLeaves(node: DataViewMatrixNode, path: string[], out: Array<{ node: DataViewMatrixNode; label: string }>) {
-        const label = this.nodeLabel(node);
-        const nextPath = label ? [...path, label] : [...path];
-        if (!node.children || node.children.length === 0) {
-            out.push({ node, label: nextPath.join(" / ") || "Total" });
-            return;
-        }
-        for (const child of node.children) this.collectRowLeaves(child, nextPath, out);
-    }
-
-    private countLeaves(node: DataViewMatrixNode): number {
-        if (!node.children || node.children.length === 0) return 1;
-        let n = 0;
-        for (const child of node.children) n += this.countLeaves(child);
-        return n;
-    }
-
     private nodeLabel(node: DataViewMatrixNode): string {
         if (node.levelValues && node.levelValues.length) {
             // Prefer levelValues for matrix nodes
@@ -1762,12 +1611,6 @@ export class Visual implements IVisual {
         }
         if (node.value != null) return String(node.value);
         return "";
-    }
-
-    private formatValue(v: any): string {
-        if (v == null) return "";
-        if (typeof v === "number") return v.toLocaleString();
-        return String(v);
     }
 
     private formatValueByMeasure(v: any, measureIndex: number): string {
