@@ -702,6 +702,12 @@ export class Visual implements IVisual {
         if (startIndex > 0) {
             const tr = document.createElement("tr");
             tr.style.height = `${startIndex * rowHeight}px`;
+            // Spacer row must have a cell or browsers may collapse it
+            const td = document.createElement("td");
+            td.colSpan = ctx.colLeafCount + (ctx.rowHeaderCols || 1);
+            td.style.border = "none";
+            td.style.padding = "0";
+            tr.appendChild(td);
             tbody.appendChild(tr);
         }
 
@@ -775,7 +781,9 @@ export class Visual implements IVisual {
                         : Math.max(0, lastIdx);
                     const basePad = 8, step = 14;
                     th.style.paddingLeft = `${basePad + step * depthIndent}px`;
-                    if ((rowInfo as any).isTotal && (rowInfo as any).toggleKey) {
+
+                    // In compact mode, we need toggle on the header row (expanded) OR the total row (collapsed)
+                    if ((rowInfo as any).toggleKey) {
                         const toggle = document.createElement("span");
                         toggle.className = "ghm-toggle";
                         const collapsed = !!(rowInfo as any).collapsed;
@@ -876,6 +884,11 @@ export class Visual implements IVisual {
         if (remaining > 0) {
             const tr = document.createElement("tr");
             tr.style.height = `${remaining * rowHeight}px`;
+            const td = document.createElement("td");
+            td.colSpan = ctx.colLeafCount + (ctx.rowHeaderCols || 1);
+            td.style.border = "none";
+            td.style.padding = "0";
+            tr.appendChild(td);
             tbody.appendChild(tr);
         }
     }
@@ -1386,9 +1399,109 @@ export class Visual implements IVisual {
             const map = subtotalChild ? (subtotalChild.values as any) : (hasGroupValues ? (node.values as any) : null);
             const gKey = [...keyPath, label].filter(Boolean).join("||");
             const isCollapsed = gKey && this.collapsedRowKeys.has(gKey);
-            // Skip emitting a pseudo subtotal for the synthetic root; Grand Total handles that case.
             const isRootNode = depth === 0 && (!label || label === "") && keyPath.length === 0;
-            const includeSubtotal = !isRootNode && (this.rowSubtotalsEnabled || isCollapsed) && hasChildren && map && depth < rowDepth;
+
+            if (isRootNode) {
+                 if (hasChildren) {
+                    for (const ch of node.children) {
+                        if ((ch as any).isSubtotal) continue;
+                        traverse(ch, 0, [], []);
+                    }
+                }
+                return;
+            }
+
+            // Compact mode logic
+            if (this.compactLayout) {
+                const labels = new Array(rowDepth).fill("");
+                for (let i = 0; i < path.length; i++) labels[i] = path[i];
+                labels[depth] = label;
+
+                // Collapsed State: Always show one row with values (acting as total)
+                if (isCollapsed) {
+                    rows.push({
+                        labels,
+                        valuesMap: map || {},
+                        isTotal: true, // Treat as total for styling/behavior
+                        toggleKey: gKey,
+                        depth,
+                        collapsed: true
+                    });
+                    return;
+                }
+
+                // Expanded State
+                if (hasChildren) {
+                    const subtotalAtBottom = this.rowSubtotalPosition === "Bottom";
+
+                    // 1. Header Row
+                    // If subtotals at bottom, this is "empty line" (label only).
+                    // If subtotals at top, this IS the subtotal row.
+                    if (subtotalAtBottom) {
+                        rows.push({
+                            labels,
+                            valuesMap: {}, // Empty values
+                            isTotal: true, // Mark as total/group header
+                            toggleKey: gKey,
+                            depth,
+                            collapsed: false
+                        });
+                    } else {
+                        // Top Subtotal
+                        if (this.rowSubtotalsEnabled && map) {
+                             rows.push({
+                                labels,
+                                valuesMap: map,
+                                isTotal: true,
+                                toggleKey: gKey,
+                                depth,
+                                collapsed: false
+                            });
+                        } else {
+                            // Header only (no subtotal values if disabled)
+                            rows.push({
+                                labels,
+                                valuesMap: {},
+                                isTotal: true,
+                                toggleKey: gKey,
+                                depth,
+                                collapsed: false
+                            });
+                        }
+                    }
+
+                    // 2. Children
+                    for (const ch of node.children) {
+                        if ((ch as any).isSubtotal) continue;
+                        // build next path correctly: fill parent positions
+                        const nextPath = new Array(rowDepth).fill("");
+                        for (let i = 0; i < path.length; i++) nextPath[i] = path[i];
+                        nextPath[depth] = label;
+                        traverse(ch, depth + 1, nextPath.slice(0, depth + 1), [...keyPath, label]);
+                    }
+
+                    // 3. Bottom Subtotal
+                    if (subtotalAtBottom && this.rowSubtotalsEnabled && map) {
+                        const totalLabels = [...labels];
+                        totalLabels[depth] = `${label} Total`;
+                        rows.push({
+                            labels: totalLabels,
+                            valuesMap: map,
+                            isTotal: true,
+                            depth,
+                            // No toggle on bottom total usually, but indentation matches group
+                        });
+                    }
+                    return;
+                } else {
+                    // Leaf in compact mode
+                    rows.push({ labels, valuesMap: node.values as any, isTotal: false });
+                    return;
+                }
+            }
+
+            // Tabular (Original) Logic
+            const includeSubtotal = (this.rowSubtotalsEnabled || isCollapsed) && hasChildren && map && depth < rowDepth;
             const subtotalAtBottom = this.rowSubtotalPosition === "Bottom";
             const pushSubtotalRow = (collapsedFlag: boolean) => {
                 const labels = new Array(rowDepth).fill("");
@@ -1396,15 +1509,15 @@ export class Visual implements IVisual {
                 labels[depth] = collapsedFlag ? label : `${label} Total`;
                 rows.push({ labels, valuesMap: map!, isTotal: true, toggleKey: gKey || undefined, depth, collapsed: collapsedFlag });
             };
+
             if (includeSubtotal && (!subtotalAtBottom || isCollapsed)) {
                 pushSubtotalRow(!!isCollapsed);
                 if (isCollapsed) return;
             }
+
             if (hasChildren) {
                 for (const ch of node.children) {
                     if ((ch as any).isSubtotal) continue;
-                    const chLabel = this.nodeLabel(ch);
-                    // build next path correctly: fill parent positions, put current node's label at its depth
                     const nextPath = new Array(rowDepth).fill("");
                     for (let i = 0; i < path.length; i++) nextPath[i] = path[i];
                     nextPath[depth] = label;
@@ -1419,9 +1532,9 @@ export class Visual implements IVisual {
             labels[depth] = label;
             rows.push({ labels, valuesMap: node.values as any, isTotal: false });
         };
-        if (root.children) {
-            for (const ch of root.children) traverse(ch, 0, [], []);
-        }
+
+        traverse(root, 0, [], []);
+
         if (this.grandTotalPosition === "Top") return grandTotalRows.concat(rows);
         return rows.concat(grandTotalRows);
     }
