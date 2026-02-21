@@ -484,6 +484,17 @@ export class Visual implements IVisual {
         // Include the thin resizer row as part of the sticky header block
         const headerDepth = headerRows.length + (displayMeasureCount > 1 ? 1 : 0) + 1;
 
+        // Calculate cumulative widths for row header columns to sticky-position them correctly
+        const rowHeaderWidths: number[] = [];
+        if (rowHeaderCols > 0) {
+             if (this.compactLayout) {
+                rowHeaderWidths.push(this.rowHeaderMinWidth);
+             } else {
+                rowHeaderWidths.push(this.rowHeaderMinWidth);
+                for (let k = 1; k < rowHeaderCols; k++) rowHeaderWidths.push(120);
+             }
+        }
+
         headerRows.forEach((rowCells, i) => {
             const tr = document.createElement("tr");
             if (i === 0 && rowHeaderCols > 0) {
@@ -491,6 +502,15 @@ export class Visual implements IVisual {
                 corner.className = "ghm-corner";
                 corner.rowSpan = headerDepth;
                 if (rowHeaderCols > 1) corner.colSpan = rowHeaderCols;
+
+                // Set explicit width and position
+                let totalW = 0;
+                for (const w of rowHeaderWidths) totalW += w;
+                corner.style.width = `${totalW}px`;
+                corner.style.minWidth = `${totalW}px`;
+                corner.style.maxWidth = `${totalW}px`;
+                corner.style.left = "0px";
+
                 this.applyGridBorder(corner, true);
                 tr.appendChild(corner);
             }
@@ -688,12 +708,25 @@ export class Visual implements IVisual {
         const totalRows = outlineRows.length;
         if (totalRows === 0) return;
 
-        const rowHeight = (this.dataFontSize || 11) + 14;
-        const scrollTop = this.container.scrollTop;
+        // Estimate row height from font size + padding (approx. 8px vertical padding + borders)
+        const rowHeight = (this.dataFontSize || 11) + 8 + 2;
+        // Ensure minimum scroll height
+        const totalHeight = totalRows * rowHeight;
+
+        // If content is smaller than viewport, render all
         const viewportHeight = this.container.clientHeight || 600;
+        const scrollTop = this.container.scrollTop;
 
         let startIndex = Math.floor(scrollTop / rowHeight);
-        let count = Math.ceil(viewportHeight / rowHeight) + 10;
+        // Render buffer
+        let count = Math.ceil(viewportHeight / rowHeight) + 20;
+
+        if (startIndex < 0) startIndex = 0;
+        if (startIndex >= totalRows) startIndex = totalRows - 1;
+        if (startIndex + count > totalRows) count = totalRows - startIndex;
+
+        // Adjust spacer height to be exact based on start index
+        const topSpace = startIndex * rowHeight;
 
         if (startIndex < 0) startIndex = 0;
         if (startIndex >= totalRows) startIndex = totalRows - 1;
@@ -701,7 +734,7 @@ export class Visual implements IVisual {
 
         if (startIndex > 0) {
             const tr = document.createElement("tr");
-            tr.style.height = `${startIndex * rowHeight}px`;
+            tr.style.height = `${topSpace}px`;
             // Spacer row must have a cell or browsers may collapse it
             const td = document.createElement("td");
             td.colSpan = ctx.colLeafCount + (ctx.rowHeaderCols || 1);
@@ -813,10 +846,23 @@ export class Visual implements IVisual {
                     tr.appendChild(th);
                 } else {
                     const toggleLevel = Math.max(0, Math.min(ctx.rowHeaderCols - 1, (rowInfo as any).depth ?? 0));
+                    let accumulatedLeft = 0;
+                    const firstWidth = (this as any).rowHeaderMinWidth || 160;
+                    const otherWidth = 120;
+
                     for (let lvl = 0; lvl < ctx.rowHeaderCols; lvl++) {
                         const th = document.createElement("th");
                         th.className = "ghm-rowheader";
                         th.textContent = (labelsToUse && labelsToUse[lvl]) || "";
+
+                        // Sticky positioning logic for multiple columns
+                        const currentWidth = (lvl === 0 ? firstWidth : otherWidth);
+                        th.style.left = `${accumulatedLeft}px`;
+                        th.style.width = `${currentWidth}px`;
+                        th.style.minWidth = `${currentWidth}px`;
+                        th.style.maxWidth = `${currentWidth}px`;
+                        accumulatedLeft += currentWidth;
+
                         this.applyRowHeaderStyle(th, lvl);
                         if (rowStyleBg) th.style.backgroundColor = rowStyleBg;
                         if (rowStyleColor) th.style.color = rowStyleColor;
@@ -1516,12 +1562,62 @@ export class Visual implements IVisual {
             }
 
             if (hasChildren) {
+                let firstChild = true;
                 for (const ch of node.children) {
                     if ((ch as any).isSubtotal) continue;
                     const nextPath = new Array(rowDepth).fill("");
                     for (let i = 0; i < path.length; i++) nextPath[i] = path[i];
                     nextPath[depth] = label;
+
+                    // In tabular mode, the first row of the expanded group must carry the toggleKey
+                    // so that the button appears on the parent's label.
+                    // We pass it down as a special property to the recursive call if it's the first child.
+                    // However, traverse() pushes rows directly. We need a way to attach the toggleKey to the *first row emitted* by the traversal of the first child.
+
+                    // Actually, simpler: we can just attach the toggleKey to the first child's traversal call.
+                    // But traverse doesn't accept an "override toggle key".
+                    // Let's modify traverse signature or logic slightly?
+                    // No, traverse is recursive.
+
+                    // Alternative: The row with the label is emitted deep inside traverse.
+                    // If we are at 'depth', the row emitted for 'ch' (at depth+1) will display 'label' at 'depth'.
+                    // Wait, the row generation logic in traverse puts 'path' into labels.
+                    // So every child row has the parent label at 'depth'.
+                    // We only want the toggle on the *first* row that shows this label.
+                    // The rendering logic handles "first row of group" visual toggle placement?
+                    // In renderBody: "if ((rowInfo as any).isTotal && (rowInfo as any).toggleKey && lvl === toggleLevel)"
+                    // This only puts toggle on TOTAL rows.
+                    // We need it on the HEADER row for tabular.
+
+                    // In tabular mode without top subtotals, the "header" is just the first data row of the first child.
+                    // We need to mark that specific row.
+
+                    const isFirstChildOfGroup = firstChild;
+                    firstChild = false;
+
+                    // Recurse
+                    const childStartIdx = rows.length;
                     traverse(ch, depth + 1, nextPath.slice(0, depth + 1), [...keyPath, label]);
+
+                    // If this was the first child, and we didn't emit a top subtotal, we must attach the toggleKey to the first row generated by this child.
+                    if (isFirstChildOfGroup && !isCollapsed && !(includeSubtotal && !subtotalAtBottom)) {
+                        if (rows.length > childStartIdx) {
+                            const firstRow = rows[childStartIdx];
+                            // Only attach if not already present (it might be a total row from deeper nesting)
+                            if (!firstRow.toggleKey) {
+                                firstRow.toggleKey = gKey;
+                                // Also need to mark it as the one to show toggle for *this* depth?
+                                // renderBody uses 'lvl === toggleLevel'. toggleLevel is roughly depth.
+                                // We need to ensure depth property on row is correct?
+                                // actually renderBody uses `(rowInfo as any).depth` which comes from here.
+                                // But leaf rows don't usually have `depth` set.
+                                // Let's set it.
+                                firstRow.depth = depth;
+                                // And ensures it's treated as a toggle-able row
+                                firstRow.isTotal = firstRow.isTotal || false; // preserve existing
+                            }
+                        }
+                    }
                 }
                 if (includeSubtotal && subtotalAtBottom) pushSubtotalRow(false);
                 return;
