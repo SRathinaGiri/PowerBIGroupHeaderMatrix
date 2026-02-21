@@ -105,6 +105,7 @@ export class Visual implements IVisual {
     private renderCtx: any = null;
     private tbody: HTMLTableSectionElement | null = null;
     private scrollFrame: number | null = null;
+    private measuredRowHeight: number = 25;
     // Totals behavior
     private showGrandTotal: boolean = true;
     private grandTotalFallback: boolean = false;
@@ -675,8 +676,38 @@ export class Visual implements IVisual {
         table.appendChild(thead);
         table.appendChild(tbody);
         this.contentHost.appendChild(table);
+
+        // Measure row height before rendering body
+        this.measureRowHeight(table);
+
         this.applyStickyOffsets(thead);
         this.updateDebugOverlay({ table, headerRows, measureCount: displayMeasureCount, columnLeaves, rowDepth, colDepth });
+
+        // Initial render
+        this.renderBody();
+    }
+
+    private measureRowHeight(table: HTMLTableElement) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.textContent = "Mg"; // generic text to check line height
+        if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
+        if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
+        td.style.padding = "4px 6px"; // match css
+        td.style.border = "1px solid #eee"; // match css
+        tr.appendChild(td);
+
+        // Temporarily append to a hidden tbody to measure
+        const tbody = document.createElement("tbody");
+        tbody.style.visibility = "hidden";
+        tbody.style.position = "absolute";
+        tbody.appendChild(tr);
+        table.appendChild(tbody);
+
+        const h = tr.offsetHeight;
+        if (h > 0) this.measuredRowHeight = h;
+
+        table.removeChild(tbody);
     }
 
     private renderBody() {
@@ -723,18 +754,8 @@ export class Visual implements IVisual {
         const totalRows = outlineRows.length;
         if (totalRows === 0) return;
 
-        // Measure real row height if available, otherwise estimate
-        let rowHeight = (this.dataFontSize || 11) + 8 + 2;
-        if (this.tbody && this.tbody.firstElementChild) {
-            const firstRow = this.tbody.firstElementChild as HTMLElement;
-            if (firstRow.offsetHeight > 0 && firstRow.style.height === "") { // Ignore spacer rows
-                rowHeight = firstRow.offsetHeight;
-            } else if (this.tbody.children.length > 1) {
-                // Try second row if first is spacer
-                const secondRow = this.tbody.children[1] as HTMLElement;
-                if (secondRow.offsetHeight > 0) rowHeight = secondRow.offsetHeight;
-            }
-        }
+        // Use pre-measured height
+        const rowHeight = this.measuredRowHeight || ((this.dataFontSize || 11) + 10);
 
         // If content is smaller than viewport, render all
         const viewportHeight = this.container.clientHeight || 600;
@@ -763,6 +784,8 @@ export class Visual implements IVisual {
             td.colSpan = ctx.colLeafCount + (ctx.rowHeaderCols || 1);
             td.style.border = "none";
             td.style.padding = "0";
+            td.style.height = `${topSpace}px`; // enforce cell height
+            td.style.lineHeight = "0"; // prevent min-line-height
             tr.appendChild(td);
             tbody.appendChild(tr);
         }
@@ -952,11 +975,14 @@ export class Visual implements IVisual {
         const remaining = totalRows - (startIndex + count);
         if (remaining > 0) {
             const tr = document.createElement("tr");
-            tr.style.height = `${remaining * rowHeight}px`;
+            const h = remaining * rowHeight;
+            tr.style.height = `${h}px`;
             const td = document.createElement("td");
             td.colSpan = ctx.colLeafCount + (ctx.rowHeaderCols || 1);
             td.style.border = "none";
             td.style.padding = "0";
+            td.style.height = `${h}px`;
+            td.style.lineHeight = "0";
             tr.appendChild(td);
             tbody.appendChild(tr);
         }
