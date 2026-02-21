@@ -46,7 +46,8 @@ type DisplayCol =
     | { kind: "collapsed"; start: number; end: number; labels: string[]; keys: string[]; collapsedLevel: number; key: string; subtotalOffset?: number };
 
 export class Visual implements IVisual {
-    private container: HTMLElement;
+    private root: HTMLElement;
+    private container: HTMLElement; // scroll container
     private toolbar: HTMLElement;
     private contentHost: HTMLElement;
     private debugEl: HTMLElement;
@@ -114,11 +115,19 @@ export class Visual implements IVisual {
     constructor(options: VisualConstructorOptions) {
         this.formattingSettingsService = new FormattingSettingsService();
         this.host = options.host;
-        this.container = document.createElement("div");
-        this.container.className = "ghm-container";
-        // Toolbar
+
+        // Root flex container
+        this.root = document.createElement("div");
+        this.root.className = "ghm-root";
+
+        // Toolbar (fixed at top)
         this.toolbar = document.createElement("div");
         this.toolbar.className = "ghm-toolbar";
+
+        // Scroll container (occupies remaining space)
+        this.container = document.createElement("div");
+        this.container.className = "ghm-container"; // keeps existing styles for scroll behavior
+
         const btnExpand = document.createElement("button");
         btnExpand.className = "ghm-btn";
         btnExpand.textContent = "➕ Expand All";
@@ -202,16 +211,22 @@ export class Visual implements IVisual {
         // Hide debug button in production
         try { (btnDebug as any).style.display = "none"; } catch {}
         this.toolbar.appendChild(btnDebug);
-        this.container.appendChild(this.toolbar);
-        // content host
+
+        // content host inside scroll container
         this.contentHost = document.createElement("div");
         this.container.appendChild(this.contentHost);
+
+        // Assemble DOM
+        this.root.appendChild(this.toolbar);
+        this.root.appendChild(this.container);
+
         // debug overlay
         this.debugEl = document.createElement("div");
         this.debugEl.className = "ghm-debug";
         this.debugEl.style.display = "none";
-        this.container.appendChild(this.debugEl);
-        options.element.appendChild(this.container);
+        this.root.appendChild(this.debugEl);
+
+        options.element.appendChild(this.root);
 
         this.container.addEventListener("scroll", () => {
             if (this.scrollFrame) return;
@@ -708,10 +723,18 @@ export class Visual implements IVisual {
         const totalRows = outlineRows.length;
         if (totalRows === 0) return;
 
-        // Estimate row height from font size + padding (approx. 8px vertical padding + borders)
-        const rowHeight = (this.dataFontSize || 11) + 8 + 2;
-        // Ensure minimum scroll height
-        const totalHeight = totalRows * rowHeight;
+        // Measure real row height if available, otherwise estimate
+        let rowHeight = (this.dataFontSize || 11) + 8 + 2;
+        if (this.tbody && this.tbody.firstElementChild) {
+            const firstRow = this.tbody.firstElementChild as HTMLElement;
+            if (firstRow.offsetHeight > 0 && firstRow.style.height === "") { // Ignore spacer rows
+                rowHeight = firstRow.offsetHeight;
+            } else if (this.tbody.children.length > 1) {
+                // Try second row if first is spacer
+                const secondRow = this.tbody.children[1] as HTMLElement;
+                if (secondRow.offsetHeight > 0) rowHeight = secondRow.offsetHeight;
+            }
+        }
 
         // If content is smaller than viewport, render all
         const viewportHeight = this.container.clientHeight || 600;
