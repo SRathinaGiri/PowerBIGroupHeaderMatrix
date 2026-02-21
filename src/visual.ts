@@ -102,10 +102,6 @@ export class Visual implements IVisual {
 
     private host: IVisualHost;
     private resizeObserver: ResizeObserver | null = null;
-    private renderCtx: any = null;
-    private tbody: HTMLTableSectionElement | null = null;
-    private scrollFrame: number | null = null;
-    private measuredRowHeight: number = 25;
     // Totals behavior
     private showGrandTotal: boolean = true;
     private grandTotalFallback: boolean = false;
@@ -134,6 +130,12 @@ export class Visual implements IVisual {
         btnExpand.textContent = "➕ Expand All";
         btnExpand.setAttribute("aria-label", "Expand all groups");
         btnExpand.addEventListener("click", () => { this.expandAll(); this.persistState(); this.refresh(); });
+        const btnCollapse = document.createElement("button");
+        btnCollapse.className = "ghm-btn";
+        btnCollapse.textContent = "➖ Collapse All";
+        btnCollapse.setAttribute("aria-label", "Collapse all groups");
+        btnCollapse.addEventListener("click", () => { this.collapseAll(); this.persistState(); this.refresh(); });
+
         const btnRowExpandLevel = document.createElement("button");
         btnRowExpandLevel.className = "ghm-btn";
         btnRowExpandLevel.title = "Expand Row Level";
@@ -228,14 +230,6 @@ export class Visual implements IVisual {
         this.root.appendChild(this.debugEl);
 
         options.element.appendChild(this.root);
-
-        this.container.addEventListener("scroll", () => {
-            if (this.scrollFrame) return;
-            this.scrollFrame = requestAnimationFrame(() => {
-                this.scrollFrame = null;
-                this.renderBody();
-            });
-        });
     }
 
     public update(options: VisualUpdateOptions) {
@@ -596,9 +590,17 @@ export class Visual implements IVisual {
         const resizerRow = document.createElement("tr");
         resizerRow.className = "ghm-resizers-row";
         // Prepend row-header placeholders so cell count matches total columns
+        let accumulatedResizerLeft = 0;
         for (let r = 0; r < rowHeaderCols; r++) {
             const th = document.createElement("th");
             th.className = "ghm-resizer-cell";
+            // In tabular layout, sticky row headers must stack horizontally
+            if (!this.compactLayout) {
+                th.style.left = `${accumulatedResizerLeft}px`;
+                accumulatedResizerLeft += (r === 0 ? this.rowHeaderMinWidth : 120);
+            } else {
+                th.style.left = "0px";
+            }
             resizerRow.appendChild(th);
         }
         const resizerRefs = displayCols;
@@ -649,69 +651,29 @@ export class Visual implements IVisual {
         // exclusively by collectOutlineRowsWithTotals() below. This avoids any
         // chance of duplicating the total row.
 
-        this.renderCtx = {
-            rows,
-            outlineRows: [],
-            rowDepth,
-            visibleRowDepth,
-            rowHeaderCols,
-            columnLeaves,
-            colLeafCount,
-            displayMeasureCount,
-            totalCountForKeys,
-            resolveMeasureIndex,
-            isSingleRow: false
-        };
-        this.tbody = tbody;
-
+        // Build body rows
+        let rowsToRender: any[] = [];
         if (rows && rows.root && rows.root.children && rows.root.children.length) {
-            this.renderCtx.outlineRows = this.collectOutlineRowsWithTotals(rows.root, rowDepth);
+            rowsToRender = this.collectOutlineRowsWithTotals(rows.root, rowDepth);
         } else {
-            this.renderCtx.isSingleRow = true;
-        }
-
-        this.renderBody();
-
-        table.appendChild(colgroup);
-        table.appendChild(thead);
-        table.appendChild(tbody);
-        this.contentHost.appendChild(table);
-
-        this.applyStickyOffsets(thead);
-        this.updateDebugOverlay({ table, headerRows, measureCount: displayMeasureCount, columnLeaves, rowDepth, colDepth });
-
-        // Initial render
-        this.renderBody();
-    }
-
-    private renderBody() {
-        if (!this.renderCtx || !this.tbody) return;
-        const ctx = this.renderCtx;
-        const tbody = this.tbody;
-
-        while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-
-        if (ctx.isSingleRow) {
+            // Single row mode
             const tr = document.createElement("tr");
-            const rows = ctx.rows;
             const valuesMap = rows && rows.root ? rows.root.values || {} : {};
             const numericKeys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a, b) => a - b);
-
-            for (let c = 0; c < ctx.colLeafCount; c++) {
-                for (let m = 0; m < ctx.displayMeasureCount; m++) {
-                    const globalM = ctx.resolveMeasureIndex(ctx.columnLeaves[c], m);
+            for (let c = 0; c < colLeafCount; c++) {
+                for (let m = 0; m < displayMeasureCount; m++) {
+                    const globalM = resolveMeasureIndex(columnLeaves[c], m);
                     const td = document.createElement("td");
-                    const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, ctx.columnLeaves[c], globalM, ctx.totalCountForKeys);
+                    const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], globalM, totalCountForKeys);
                     td.textContent = this.formatValueByMeasure(v, globalM);
-                    this.applyCellConditionalStyle(td, valuesMap as any, ctx.columnLeaves[c], globalM, ctx.totalCountForKeys);
+                    this.applyCellConditionalStyle(td, valuesMap as any, columnLeaves[c], globalM, totalCountForKeys);
                     if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
                     if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
                     if (this.dataBold) td.style.fontWeight = "bold";
                     if (this.cellColor) td.style.color = this.cellColor;
-
                     let baseBg = "";
                     if (this.zebraColEnabled) {
-                        const colIdx = c * ctx.displayMeasureCount + m;
+                        const colIdx = c * displayMeasureCount + m;
                         baseBg = (colIdx % 2 === 0) ? this.zebraColEvenColor : this.zebraColOddColor;
                     }
                     if (!baseBg && this.cellBg) baseBg = this.cellBg;
@@ -721,75 +683,20 @@ export class Visual implements IVisual {
                 }
             }
             tbody.appendChild(tr);
-            return;
         }
 
-        const outlineRows = ctx.outlineRows;
-        const totalRows = outlineRows.length;
-        if (totalRows === 0) return;
-
-        // Use estimated or previously measured height
-        // Fallback to a safe minimum if measuredRowHeight is invalid
-        const rowHeight = (this.measuredRowHeight && this.measuredRowHeight > 0)
-            ? this.measuredRowHeight
-            : ((this.dataFontSize || 11) + 14);
-
-        // If content is smaller than viewport, render all
-        const viewportHeight = this.container.clientHeight || 600;
-        const scrollTop = this.container.scrollTop;
-
-        let startIndex = Math.floor(scrollTop / rowHeight);
-        // Render buffer
-        let count = Math.ceil(viewportHeight / rowHeight) + 20;
-
-        if (startIndex < 0) startIndex = 0;
-        if (startIndex >= totalRows) startIndex = totalRows - 1;
-        if (startIndex + count > totalRows) count = totalRows - startIndex;
-
-        // Adjust spacer height to be exact based on start index
-        const topSpace = startIndex * rowHeight;
-
-        if (startIndex < 0) startIndex = 0;
-        if (startIndex >= totalRows) startIndex = totalRows - 1;
-        if (startIndex + count > totalRows) count = totalRows - startIndex;
-
-        if (startIndex > 0) {
-            const tr = document.createElement("tr");
-            tr.style.height = `${topSpace}px`;
-            // Spacer row must have a cell or browsers may collapse it
-            const td = document.createElement("td");
-            td.colSpan = ctx.colLeafCount + (ctx.rowHeaderCols || 1);
-            td.style.border = "none";
-            td.style.padding = "0";
-            td.style.height = `${topSpace}px`; // enforce cell height
-            td.style.lineHeight = "0"; // prevent min-line-height
-            tr.appendChild(td);
-            tbody.appendChild(tr);
-        }
-
-        const lastShownRowLabels: Array<string | null> = new Array(ctx.rowDepth).fill(null);
-        if (startIndex > 0) {
-            const prev = outlineRows[startIndex - 1];
-            if (prev.labels) {
-                for (let i = 0; i < ctx.rowDepth; i++) lastShownRowLabels[i] = prev.labels[i];
-            }
-        }
-
-        let bodyRowIndex = startIndex;
-        let renderedAny = false;
-        for (let i = 0; i < count; i++) {
-            if (startIndex + i >= totalRows) break;
-            renderedAny = true;
-            const rowInfoRaw = outlineRows[startIndex + i];
+        const lastShownRowLabels: Array<string | null> = new Array(rowDepth).fill(null);
+        let bodyRowIndex = 0;
+        for (const rowInfoRaw of rowsToRender) {
             const rowInfo = { ...rowInfoRaw } as any;
             const valuesMapForRow = (rowInfo as any).valuesMap || {} as any;
-            const rowMeasureBg = this.getRowMeasureBg(valuesMapForRow as any, ctx.totalCountForKeys);
+            const rowMeasureBg = this.getRowMeasureBg(valuesMapForRow as any, totalCountForKeys);
             let labelsToUse: string[] = rowInfo.labels as string[];
 
             if (!this.compactLayout && !this.repeatLabels && !rowInfo.isTotal && this.rowSubtotalsEnabled) {
                 if (this.rowSubtotalPosition === "Bottom") {
-                    const newLabels = new Array(ctx.rowDepth).fill("");
-                    for (let lvl = 0; lvl < ctx.rowDepth; lvl++) {
+                    const newLabels = new Array(rowDepth).fill("");
+                    for (let lvl = 0; lvl < rowDepth; lvl++) {
                         const lbl = (rowInfo.labels && rowInfo.labels[lvl]) ? rowInfo.labels[lvl] : "";
                         if (!lbl) { newLabels[lvl] = ""; continue; }
                         if (lastShownRowLabels[lvl] === lbl) {
@@ -797,14 +704,14 @@ export class Visual implements IVisual {
                         } else {
                             newLabels[lvl] = lbl;
                             lastShownRowLabels[lvl] = lbl;
-                            for (let deeper = lvl + 1; deeper < ctx.rowDepth; deeper++) lastShownRowLabels[deeper] = null;
+                            for (let deeper = lvl + 1; deeper < rowDepth; deeper++) lastShownRowLabels[deeper] = null;
                         }
                     }
                     labelsToUse = newLabels;
                 } else {
-                    const newLabels = new Array(ctx.rowDepth).fill("");
+                    const newLabels = new Array(rowDepth).fill("");
                     let lastIdx = -1;
-                    for (let k = ctx.rowDepth - 1; k >= 0; k--) { if (rowInfo.labels && rowInfo.labels[k]) { lastIdx = k; break; } }
+                    for (let k = rowDepth - 1; k >= 0; k--) { if (rowInfo.labels && rowInfo.labels[k]) { lastIdx = k; break; } }
                     if (lastIdx >= 0) newLabels[lastIdx] = rowInfo.labels[lastIdx];
                     labelsToUse = newLabels;
                 }
@@ -814,7 +721,6 @@ export class Visual implements IVisual {
             }
 
             const tr = document.createElement("tr");
-            tr.style.height = `${rowHeight}px`;
             if ((rowInfo as any).isTotal) tr.className = "ghm-totalrow";
             if (this.zebraEnabled && !rowInfo.isTotal) {
                 const zebraColor = (bodyRowIndex % 2 === 0) ? this.zebraEvenColor : this.zebraOddColor;
@@ -823,25 +729,24 @@ export class Visual implements IVisual {
             const rowStyleBg = rowMeasureBg || this.rowHeaderBg || "";
             const rowStyleColor = this.rowHeaderColor || "";
 
-            if (ctx.rowHeaderCols > 0) {
+            if (rowHeaderCols > 0) {
                 if (this.compactLayout) {
                     const th = document.createElement("th");
                     th.className = "ghm-rowheader";
                     let txt = "";
                     let lastIdx = -1;
-                    for (let k = ctx.rowDepth - 1; k >= 0; k--) { if (labelsToUse && labelsToUse[k]) { txt = labelsToUse[k]; lastIdx = k; break; } }
+                    for (let k = rowDepth - 1; k >= 0; k--) { if (labelsToUse && labelsToUse[k]) { txt = labelsToUse[k]; lastIdx = k; break; } }
                     th.textContent = txt || "";
                     this.applyRowHeaderStyle(th, 0);
                     if (rowStyleBg) th.style.backgroundColor = rowStyleBg;
                     if (rowStyleColor) th.style.color = rowStyleColor;
                     this.applyGridBorder(th, true);
                     const depthIndent = (rowInfo as any).isTotal && (rowInfo as any).depth !== undefined
-                        ? Math.max(0, Math.min(ctx.rowDepth - 1, (rowInfo as any).depth))
+                        ? Math.max(0, Math.min(rowDepth - 1, (rowInfo as any).depth))
                         : Math.max(0, lastIdx);
                     const basePad = 8, step = 14;
                     th.style.paddingLeft = `${basePad + step * depthIndent}px`;
 
-                    // In compact mode, we need toggle on the header row (expanded) OR the total row (collapsed)
                     if ((rowInfo as any).toggleKey) {
                         const toggle = document.createElement("span");
                         toggle.className = "ghm-toggle";
@@ -871,17 +776,16 @@ export class Visual implements IVisual {
                     if (this.rowHeaderBg) th.style.backgroundColor = this.rowHeaderBg;
                     tr.appendChild(th);
                 } else {
-                    const toggleLevel = Math.max(0, Math.min(ctx.rowHeaderCols - 1, (rowInfo as any).depth ?? 0));
+                    const toggleLevel = Math.max(0, Math.min(rowHeaderCols - 1, (rowInfo as any).depth ?? 0));
                     let accumulatedLeft = 0;
                     const firstWidth = (this as any).rowHeaderMinWidth || 160;
                     const otherWidth = 120;
 
-                    for (let lvl = 0; lvl < ctx.rowHeaderCols; lvl++) {
+                    for (let lvl = 0; lvl < rowHeaderCols; lvl++) {
                         const th = document.createElement("th");
                         th.className = "ghm-rowheader";
                         th.textContent = (labelsToUse && labelsToUse[lvl]) || "";
 
-                        // Sticky positioning logic for multiple columns
                         const currentWidth = (lvl === 0 ? firstWidth : otherWidth);
                         th.style.left = `${accumulatedLeft}px`;
                         th.style.width = `${currentWidth}px`;
@@ -926,20 +830,20 @@ export class Visual implements IVisual {
 
             const valuesMap = (rowInfo as any).valuesMap || {} as any;
             const numericKeys = Object.keys(valuesMap as any).map(k => +k).filter(k => !Number.isNaN(k)).sort((a,b)=>a-b);
-            for (let c = 0; c < ctx.colLeafCount; c++) {
-                for (let m = 0; m < ctx.displayMeasureCount; m++) {
-                    const globalM = ctx.resolveMeasureIndex(ctx.columnLeaves[c], m);
+            for (let c = 0; c < colLeafCount; c++) {
+                for (let m = 0; m < displayMeasureCount; m++) {
+                    const globalM = resolveMeasureIndex(columnLeaves[c], m);
                     const td = document.createElement("td");
-                    const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, ctx.columnLeaves[c], globalM, ctx.totalCountForKeys);
+                    const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], globalM, totalCountForKeys);
                     td.textContent = this.formatValueByMeasure(v, globalM);
-                    this.applyCellConditionalStyle(td, valuesMap as any, ctx.columnLeaves[c], globalM, ctx.totalCountForKeys);
+                    this.applyCellConditionalStyle(td, valuesMap as any, columnLeaves[c], globalM, totalCountForKeys);
                     if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
                     if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
                     if (this.dataBold) td.style.fontWeight = "bold";
                     if (this.cellColor) td.style.color = this.cellColor;
                     let baseBg = "";
                     if (this.zebraColEnabled) {
-                        const colIdx = c * ctx.displayMeasureCount + m;
+                        const colIdx = c * displayMeasureCount + m;
                         baseBg = (colIdx % 2 === 0) ? this.zebraColEvenColor : this.zebraColOddColor;
                     }
                     if (!baseBg && this.cellBg) baseBg = this.cellBg;
@@ -952,53 +856,13 @@ export class Visual implements IVisual {
             bodyRowIndex++;
         }
 
-        // Measure actual height from the first rendered content row
-        // (skip top spacer if present)
-        if (renderedAny) {
-            const children = tbody.children;
-            let firstContentRow: HTMLElement | null = null;
-            if (startIndex > 0 && children.length > 1) {
-                firstContentRow = children[1] as HTMLElement;
-            } else if (startIndex === 0 && children.length > 0) {
-                firstContentRow = children[0] as HTMLElement;
-            }
+        table.appendChild(colgroup);
+        table.appendChild(thead);
+        table.appendChild(tbody);
+        this.contentHost.appendChild(table);
 
-            if (firstContentRow) {
-                const h = firstContentRow.offsetHeight;
-                if (h > 0 && h !== this.measuredRowHeight) {
-                    this.measuredRowHeight = h;
-                    // Re-render immediately to fix spacer heights based on real row height
-                    // Use timeout to avoid sync recursion loop if measurement oscillates
-                    // But here we want immediate fix. A simple guard or max-depth is safer.
-                    // For now, just renderBody() again once.
-                    // We can check if we are already in a re-render loop?
-                    // Let's just trust that the height stabilizes quickly (usually constant).
-                    // To be safe, we only re-render if the diff is significant > 1px
-                    if (Math.abs(h - rowHeight) > 1) {
-                         // Re-calculate context with new height immediately
-                         // Clear buffer to avoid duplicates
-                         while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-                         this.renderBody();
-                         return;
-                    }
-                }
-            }
-        }
-
-        const remaining = totalRows - (startIndex + count);
-        if (remaining > 0) {
-            const tr = document.createElement("tr");
-            const h = remaining * rowHeight;
-            tr.style.height = `${h}px`;
-            const td = document.createElement("td");
-            td.colSpan = ctx.colLeafCount + (ctx.rowHeaderCols || 1);
-            td.style.border = "none";
-            td.style.padding = "0";
-            td.style.height = `${h}px`;
-            td.style.lineHeight = "0";
-            tr.appendChild(td);
-            tbody.appendChild(tr);
-        }
+        this.applyStickyOffsets(thead);
+        this.updateDebugOverlay({ table, headerRows, measureCount: displayMeasureCount, columnLeaves, rowDepth, colDepth });
     }
 
     private computeDisplayColumns(root: DataViewMatrixNode, depth: number): DisplayCol[] {
@@ -1097,7 +961,6 @@ export class Visual implements IVisual {
         if (!columns.root.children || columns.root.children.length === 0) return 1;
         return depthFrom(columns.root);
     }
-
 
     private refresh() {
         // Re-render using the last received matrix
