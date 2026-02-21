@@ -677,37 +677,11 @@ export class Visual implements IVisual {
         table.appendChild(tbody);
         this.contentHost.appendChild(table);
 
-        // Measure row height before rendering body
-        this.measureRowHeight(table);
-
         this.applyStickyOffsets(thead);
         this.updateDebugOverlay({ table, headerRows, measureCount: displayMeasureCount, columnLeaves, rowDepth, colDepth });
 
         // Initial render
         this.renderBody();
-    }
-
-    private measureRowHeight(table: HTMLTableElement) {
-        const tr = document.createElement("tr");
-        const td = document.createElement("td");
-        td.textContent = "Mg"; // generic text to check line height
-        if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
-        if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
-        td.style.padding = "4px 6px"; // match css
-        td.style.border = "1px solid #eee"; // match css
-        tr.appendChild(td);
-
-        // Temporarily append to a hidden tbody to measure
-        const tbody = document.createElement("tbody");
-        tbody.style.visibility = "hidden";
-        tbody.style.position = "absolute";
-        tbody.appendChild(tr);
-        table.appendChild(tbody);
-
-        const h = tr.offsetHeight;
-        if (h > 0) this.measuredRowHeight = h;
-
-        table.removeChild(tbody);
     }
 
     private renderBody() {
@@ -754,8 +728,11 @@ export class Visual implements IVisual {
         const totalRows = outlineRows.length;
         if (totalRows === 0) return;
 
-        // Use pre-measured height
-        const rowHeight = this.measuredRowHeight || ((this.dataFontSize || 11) + 10);
+        // Use estimated or previously measured height
+        // Fallback to a safe minimum if measuredRowHeight is invalid
+        const rowHeight = (this.measuredRowHeight && this.measuredRowHeight > 0)
+            ? this.measuredRowHeight
+            : ((this.dataFontSize || 11) + 14);
 
         // If content is smaller than viewport, render all
         const viewportHeight = this.container.clientHeight || 600;
@@ -799,7 +776,10 @@ export class Visual implements IVisual {
         }
 
         let bodyRowIndex = startIndex;
+        let renderedAny = false;
         for (let i = 0; i < count; i++) {
+            if (startIndex + i >= totalRows) break;
+            renderedAny = true;
             const rowInfoRaw = outlineRows[startIndex + i];
             const rowInfo = { ...rowInfoRaw } as any;
             const valuesMapForRow = (rowInfo as any).valuesMap || {} as any;
@@ -970,6 +950,39 @@ export class Visual implements IVisual {
             }
             tbody.appendChild(tr);
             bodyRowIndex++;
+        }
+
+        // Measure actual height from the first rendered content row
+        // (skip top spacer if present)
+        if (renderedAny) {
+            const children = tbody.children;
+            let firstContentRow: HTMLElement | null = null;
+            if (startIndex > 0 && children.length > 1) {
+                firstContentRow = children[1] as HTMLElement;
+            } else if (startIndex === 0 && children.length > 0) {
+                firstContentRow = children[0] as HTMLElement;
+            }
+
+            if (firstContentRow) {
+                const h = firstContentRow.offsetHeight;
+                if (h > 0 && h !== this.measuredRowHeight) {
+                    this.measuredRowHeight = h;
+                    // Re-render immediately to fix spacer heights based on real row height
+                    // Use timeout to avoid sync recursion loop if measurement oscillates
+                    // But here we want immediate fix. A simple guard or max-depth is safer.
+                    // For now, just renderBody() again once.
+                    // We can check if we are already in a re-render loop?
+                    // Let's just trust that the height stabilizes quickly (usually constant).
+                    // To be safe, we only re-render if the diff is significant > 1px
+                    if (Math.abs(h - rowHeight) > 1) {
+                         // Re-calculate context with new height immediately
+                         // Clear buffer to avoid duplicates
+                         while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+                         this.renderBody();
+                         return;
+                    }
+                }
+            }
         }
 
         const remaining = totalRows - (startIndex + count);
