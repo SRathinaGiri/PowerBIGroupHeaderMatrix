@@ -798,19 +798,23 @@ export class Visual implements IVisual {
                         if (rowStyleColor) th.style.color = rowStyleColor;
                         if (this.rowHeaderBg) th.style.backgroundColor = this.rowHeaderBg;
                         this.applyGridBorder(th, true);
-                        if ((rowInfo as any).toggleKey && lvl === toggleLevel) {
+
+                        const toggleKeyAtLevel = (rowInfo as any).toggles ? (rowInfo as any).toggles[lvl] : ((rowInfo as any).toggleKey && lvl === toggleLevel ? (rowInfo as any).toggleKey : null);
+
+                        if (toggleKeyAtLevel) {
                             const toggle = document.createElement("span");
                             toggle.className = "ghm-toggle";
-                            const collapsed = !!(rowInfo as any).collapsed;
-                            toggle.textContent = collapsed ? "+" : "-";
-                            toggle.title = collapsed ? "Expand group" : "Collapse group";
+                            const isKeyCollapsed = this.collapsedRowKeys.has(toggleKeyAtLevel);
+
+                            toggle.textContent = isKeyCollapsed ? "+" : "-";
+                            toggle.title = isKeyCollapsed ? "Expand group" : "Collapse group";
                             toggle.setAttribute("role", "button");
-                            toggle.setAttribute("aria-label", collapsed ? "Expand row group" : "Collapse row group");
+                            toggle.setAttribute("aria-label", isKeyCollapsed ? "Expand row group" : "Collapse row group");
                             toggle.tabIndex = 0;
                             const handler = (ev: Event) => {
                                 ev.stopPropagation();
-                                const key = String((rowInfo as any).toggleKey);
-                                if (collapsed) this.collapsedRowKeys.delete(key); else this.collapsedRowKeys.add(key);
+                                const key = String(toggleKeyAtLevel);
+                                if (isKeyCollapsed) this.collapsedRowKeys.delete(key); else this.collapsedRowKeys.add(key);
                                 this.persistState();
                                 this.refresh();
                             };
@@ -1340,9 +1344,9 @@ export class Visual implements IVisual {
         return rows;
     }
 
-    private collectOutlineRowsWithTotals(root: DataViewMatrixNode, rowDepth: number): Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean }> {
-        const rows: Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean }> = [];
-        const grandTotalRows: Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean }> = [];
+    private collectOutlineRowsWithTotals(root: DataViewMatrixNode, rowDepth: number): Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean; toggles?: { [key: number]: string } }> {
+        const rows: Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean; toggles?: { [key: number]: string } }> = [];
+        const grandTotalRows: Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean; toggles?: { [key: number]: string } }> = [];
         const tryRootTotal = () => {
             if (!this.showGrandTotal) return;
             const subtotalChild = root.children && (root.children as any[]).find(ch => (ch as any).isSubtotal);
@@ -1478,7 +1482,9 @@ export class Visual implements IVisual {
                 const labels = new Array(rowDepth).fill("");
                 for (let i = 0; i < path.length; i++) labels[i] = path[i];
                 labels[depth] = collapsedFlag ? label : `${label} Total`;
-                rows.push({ labels, valuesMap: map!, isTotal: true, toggleKey: gKey || undefined, depth, collapsed: collapsedFlag });
+                const toggles: { [key: number]: string } = {};
+                if (gKey) toggles[depth] = gKey;
+                rows.push({ labels, valuesMap: map!, isTotal: true, toggleKey: gKey || undefined, depth, collapsed: collapsedFlag, toggles });
             };
 
             if (includeSubtotal && (!subtotalAtBottom || isCollapsed)) {
@@ -1528,17 +1534,15 @@ export class Visual implements IVisual {
                     if (isFirstChildOfGroup && !isCollapsed && !(includeSubtotal && !subtotalAtBottom)) {
                         if (rows.length > childStartIdx) {
                             const firstRow = rows[childStartIdx];
-                            // Only attach if not already present (it might be a total row from deeper nesting)
+                            // Ensure toggles map exists and add the toggle for this depth
+                            if (!firstRow.toggles) firstRow.toggles = {};
+                            firstRow.toggles[depth] = gKey;
+
+                            // Keep toggleKey for backward compatibility (used by compact mode logic)
+                            // but in tabular mode we prefer `toggles`
                             if (!firstRow.toggleKey) {
                                 firstRow.toggleKey = gKey;
-                                // Also need to mark it as the one to show toggle for *this* depth?
-                                // renderBody uses 'lvl === toggleLevel'. toggleLevel is roughly depth.
-                                // We need to ensure depth property on row is correct?
-                                // actually renderBody uses `(rowInfo as any).depth` which comes from here.
-                                // But leaf rows don't usually have `depth` set.
-                                // Let's set it.
                                 firstRow.depth = depth;
-                                // And ensures it's treated as a toggle-able row
                                 firstRow.isTotal = firstRow.isTotal || false; // preserve existing
                             }
                         }
