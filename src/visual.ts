@@ -46,8 +46,10 @@ type DisplayCol =
     | { kind: "collapsed"; start: number; end: number; labels: string[]; keys: string[]; collapsedLevel: number; key: string; subtotalOffset?: number };
 
 interface SortState {
-    queryKeys: string;
-    measureIndex: number;
+    type: "value" | "label";
+    queryKeys: string; // for value sort
+    measureIndex: number; // for value sort
+    level: number; // for label sort
     direction: "ASC" | "DESC";
 }
 
@@ -105,6 +107,7 @@ export class Visual implements IVisual {
     private cellBg?: string;
     private rowLevelStyles: Array<{fontFamily?: string; fontSize?: number; fontWeight?: string; italic?: boolean; underline?: boolean}> = [];
     private colLevelStyles: Array<{fontFamily?: string; fontSize?: number; fontWeight?: string; italic?: boolean; underline?: boolean}> = [];
+    private rowLevelNames: string[] = [];
     private sortState: SortState | null = null;
 
     private host: IVisualHost;
@@ -515,21 +518,33 @@ export class Visual implements IVisual {
         headerRows.forEach((rowCells, i) => {
             const tr = document.createElement("tr");
             if (i === 0 && rowHeaderCols > 0) {
-                const corner = document.createElement("th");
-                corner.className = "ghm-corner";
-                corner.rowSpan = headerDepth;
-                if (rowHeaderCols > 1) corner.colSpan = rowHeaderCols;
+                let accumulatedCornerLeft = 0;
+                for (let r = 0; r < rowHeaderCols; r++) {
+                    const corner = document.createElement("th");
+                    corner.className = "ghm-corner";
+                    corner.rowSpan = headerDepth;
 
-                // Set explicit width and position
-                let totalW = 0;
-                for (const w of rowHeaderWidths) totalW += w;
-                corner.style.width = `${totalW}px`;
-                corner.style.minWidth = `${totalW}px`;
-                corner.style.maxWidth = `${totalW}px`;
-                corner.style.left = "0px";
+                    const width = rowHeaderWidths[r] || 120;
+                    corner.style.width = `${width}px`;
+                    corner.style.minWidth = `${width}px`;
+                    corner.style.maxWidth = `${width}px`;
 
-                this.applyGridBorder(corner, true);
-                tr.appendChild(corner);
+                    if (!this.compactLayout) {
+                        corner.style.left = `${accumulatedCornerLeft}px`;
+                        accumulatedCornerLeft += width;
+                    } else {
+                        corner.style.left = "0px";
+                    }
+
+                    // Text content: Compact layout uses "Rows" or first level; Tabular uses specific level names
+                    const levelName = this.compactLayout ? (this.rowLevelNames[0] || "Rows") : (this.rowLevelNames[r] || "");
+                    corner.textContent = levelName;
+
+                    this.attachSortHandler(corner, "", -1, r, "label");
+
+                    this.applyGridBorder(corner, true);
+                    tr.appendChild(corner);
+                }
             }
             for (const cell of rowCells) {
                 const th = document.createElement("th");
@@ -666,22 +681,26 @@ export class Visual implements IVisual {
 
         // Apply sorting if active
         if (this.sortState && rows && rows.root && rows.root.children) {
-            const sortCol = columnLeaves.find(c => {
-                const k = c.kind === "leaf" ? c.keys.join("||") : c.key;
-                return k === this.sortState!.queryKeys;
-            });
-            if (sortCol) {
-                let valueKey = -1;
-                if (sortCol.kind === "leaf") {
-                    valueKey = sortCol.offset * totalCountForKeys + this.sortState.measureIndex;
-                } else {
-                     const coll = sortCol as any as { subtotalOffset?: number };
-                     if (coll.subtotalOffset !== undefined) {
-                        valueKey = coll.subtotalOffset * totalCountForKeys + this.sortState.measureIndex;
-                     }
-                }
-                if (valueKey !== -1) {
-                    this.sortRowsRecursive(rows.root.children, valueKey, this.sortState.direction);
+            if (this.sortState.type === "label") {
+                 this.sortRowsRecursive(rows.root.children, -1, this.sortState.direction, "label", this.sortState.level, 0);
+            } else {
+                const sortCol = columnLeaves.find(c => {
+                    const k = c.kind === "leaf" ? c.keys.join("||") : c.key;
+                    return k === this.sortState!.queryKeys;
+                });
+                if (sortCol) {
+                    let valueKey = -1;
+                    if (sortCol.kind === "leaf") {
+                        valueKey = sortCol.offset * totalCountForKeys + this.sortState.measureIndex;
+                    } else {
+                         const coll = sortCol as any as { subtotalOffset?: number };
+                         if (coll.subtotalOffset !== undefined) {
+                            valueKey = coll.subtotalOffset * totalCountForKeys + this.sortState.measureIndex;
+                         }
+                    }
+                    if (valueKey !== -1) {
+                        this.sortRowsRecursive(rows.root.children, valueKey, this.sortState.direction, "value", -1, 0);
+                    }
                 }
             }
         }
@@ -1173,10 +1192,12 @@ export class Visual implements IVisual {
     private loadLevelStyles(matrix: DataViewMatrix) {
         this.rowLevelStyles = [];
         this.colLevelStyles = [];
+        this.rowLevelNames = [];
         const rows = matrix.rows; const cols = matrix.columns;
         if (rows && rows.levels) {
             rows.levels.forEach((lvl, i) => {
                 const src = lvl.sources && lvl.sources[0];
+                this.rowLevelNames.push((src && src.displayName) || `Row level ${i + 1}`);
                 const obj = (src && (src as any).objects && (src as any).objects.labelStylePerLevel) || {};
                 this.rowLevelStyles[i] = {
                     fontFamily: obj.fontFamily,
@@ -1808,25 +1829,47 @@ export class Visual implements IVisual {
         } catch { return String(v); }
     }
 
-    private sortRowsRecursive(nodes: DataViewMatrixNode[], valueKey: number, direction: "ASC" | "DESC") {
+    private sortRowsRecursive(nodes: DataViewMatrixNode[], valueKey: number, direction: "ASC" | "DESC", type: "value" | "label", level: number, currentDepth: number) {
         if (!nodes) return;
-        nodes.sort((a, b) => {
-            const valA = (a.values && a.values[valueKey]) ? a.values[valueKey].value : null;
-            const valB = (b.values && b.values[valueKey]) ? b.values[valueKey].value : null;
-            if (valA === valB) return 0;
-            if (valA == null) return 1;
-            if (valB == null) return -1;
-            if (valA < valB) return direction === "ASC" ? -1 : 1;
-            return direction === "ASC" ? 1 : -1;
-        });
+
+        if (type === "value") {
+            nodes.sort((a, b) => {
+                const valA = (a.values && a.values[valueKey]) ? a.values[valueKey].value : null;
+                const valB = (b.values && b.values[valueKey]) ? b.values[valueKey].value : null;
+                if (valA === valB) return 0;
+                if (valA == null) return 1;
+                if (valB == null) return -1;
+                if (valA < valB) return direction === "ASC" ? -1 : 1;
+                return direction === "ASC" ? 1 : -1;
+            });
+        } else {
+            // Label sort
+            // In compact layout (level=-1 or similar implicit), or if current depth matches target level
+            if (level === -1 || currentDepth === level) {
+                 nodes.sort((a, b) => {
+                    const labelA = this.nodeLabel(a);
+                    const labelB = this.nodeLabel(b);
+                    if (labelA === labelB) return 0;
+                    if (labelA == null) return 1;
+                    if (labelB == null) return -1;
+                    if (labelA < labelB) return direction === "ASC" ? -1 : 1;
+                    return direction === "ASC" ? 1 : -1;
+                 });
+            }
+        }
+
         for (const child of nodes) {
-            if (child.children) this.sortRowsRecursive(child.children, valueKey, direction);
+            if (child.children) this.sortRowsRecursive(child.children, valueKey, direction, type, level, currentDepth + 1);
         }
     }
 
-    private attachSortHandler(th: HTMLElement, queryKeys: string, measureIndex: number) {
+    private attachSortHandler(th: HTMLElement, queryKeys: string, measureIndex: number, level: number = 0, type: "value" | "label" = "value") {
         th.style.cursor = "pointer";
-        const isSorted = this.sortState && this.sortState.queryKeys === queryKeys && this.sortState.measureIndex === measureIndex;
+        const isSorted = this.sortState && this.sortState.type === type && (
+            (type === "value" && this.sortState.queryKeys === queryKeys && this.sortState.measureIndex === measureIndex) ||
+            (type === "label" && this.sortState.level === level)
+        );
+
         if (isSorted) {
             const arrow = document.createElement("span");
             arrow.className = "ghm-sort-icon";
@@ -1842,7 +1885,7 @@ export class Visual implements IVisual {
                     this.sortState = null;
                 }
             } else {
-                this.sortState = { queryKeys, measureIndex, direction: "ASC" };
+                this.sortState = { type, queryKeys, measureIndex, level, direction: "ASC" };
             }
             this.refresh();
         });
