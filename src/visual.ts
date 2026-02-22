@@ -876,7 +876,10 @@ export class Visual implements IVisual {
         const subtotalOffsetByKey = new Map<string, number>();
         let offset = 0;
         const walk = (node: DataViewMatrixNode, labels: string[], keys: string[], parentKey: string, underSubtotal: boolean) => {
-            const label = this.nodeLabel(node);
+            let label = this.nodeLabel(node);
+            if (!label && (node as any).isSubtotal) {
+                label = (labels.length === 0) ? "Grand Total" : "Total";
+            }
             const key = [...keys, label].filter(Boolean).join("||");
             const newLabels = [...labels, label];
             const newKeys = [...keys, label];
