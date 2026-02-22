@@ -45,6 +45,12 @@ type DisplayCol =
     | { kind: "leaf"; offset: number; labels: string[]; keys: string[] }
     | { kind: "collapsed"; start: number; end: number; labels: string[]; keys: string[]; collapsedLevel: number; key: string; subtotalOffset?: number };
 
+interface SortState {
+    queryKeys: string;
+    measureIndex: number;
+    direction: "ASC" | "DESC";
+}
+
 export class Visual implements IVisual {
     private root: HTMLElement;
     private container: HTMLElement; // scroll container
@@ -99,6 +105,7 @@ export class Visual implements IVisual {
     private cellBg?: string;
     private rowLevelStyles: Array<{fontFamily?: string; fontSize?: number; fontWeight?: string; italic?: boolean; underline?: boolean}> = [];
     private colLevelStyles: Array<{fontFamily?: string; fontSize?: number; fontWeight?: string; italic?: boolean; underline?: boolean}> = [];
+    private sortState: SortState | null = null;
 
     private host: IVisualHost;
     private resizeObserver: ResizeObserver | null = null;
@@ -565,6 +572,12 @@ export class Visual implements IVisual {
                 this.applyGridBorder(th, true);
                 th.appendChild(txt);
                 if (cell.span && cell.span > 1) th.colSpan = cell.span;
+
+                // Add sort handler
+                if (displayMeasureCount <= 1 && cell.isLeafHeader) {
+                    this.attachSortHandler(th, cell.queryKeys, 0);
+                }
+
                 tr.appendChild(th);
             }
             thead.appendChild(tr);
@@ -580,6 +593,11 @@ export class Visual implements IVisual {
                     if (this.colHeaderColor) th.style.color = this.colHeaderColor;
                     if (this.colHeaderBg) th.style.backgroundColor = this.colHeaderBg;
                     this.applyGridBorder(th, true);
+
+                    // Add sort handler
+                    const queryKeys = ref.kind === "leaf" ? ref.keys.join("||") : ref.key;
+                    this.attachSortHandler(th, queryKeys, m);
+
                     tr.appendChild(th);
                 }
             }
@@ -645,6 +663,28 @@ export class Visual implements IVisual {
         }
 
         const colLeafCount = columnLeaves.length;
+
+        // Apply sorting if active
+        if (this.sortState && rows && rows.root && rows.root.children) {
+            const sortCol = columnLeaves.find(c => {
+                const k = c.kind === "leaf" ? c.keys.join("||") : c.key;
+                return k === this.sortState!.queryKeys;
+            });
+            if (sortCol) {
+                let valueKey = -1;
+                if (sortCol.kind === "leaf") {
+                    valueKey = sortCol.offset * totalCountForKeys + this.sortState.measureIndex;
+                } else {
+                     const coll = sortCol as any as { subtotalOffset?: number };
+                     if (coll.subtotalOffset !== undefined) {
+                        valueKey = coll.subtotalOffset * totalCountForKeys + this.sortState.measureIndex;
+                     }
+                }
+                if (valueKey !== -1) {
+                    this.sortRowsRecursive(rows.root.children, valueKey, this.sortState.direction);
+                }
+            }
+        }
 
         // Do not inject a separate "Grand Total" row here.
         // Body rows (including the root grand total when applicable) are generated
@@ -1665,10 +1705,10 @@ export class Visual implements IVisual {
 
     // no custom aggregation: collapsed groups show blank cells to avoid misrepresenting measure semantics
 
-    private buildHeaderRowsFromDisplay(displayCols: DisplayCol[], depth: number): Array<Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean }>> {
-        const rows: Array<Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean }>> = [];
+    private buildHeaderRowsFromDisplay(displayCols: DisplayCol[], depth: number): Array<Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean; isLeafHeader: boolean; queryKeys: string }>> {
+        const rows: Array<Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean; isLeafHeader: boolean; queryKeys: string }>> = [];
         for (let level = 0; level < depth; level++) {
-            const row: Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean }> = [];
+            const row: Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean; isLeafHeader: boolean; queryKeys: string }> = [];
             let i = 0;
             while (i < displayCols.length) {
                 const col = displayCols[i];
@@ -1678,6 +1718,11 @@ export class Visual implements IVisual {
                 // Avoid showing a bare +/- toggle with no label when an upper level
                 // header is collapsed. Only show toggles when the label is visible.
                 const togglable = !!key && level < depth - 1 && !!label;
+
+                // Determine if this is the "effective leaf" for sorting
+                const isLeafHeader = (col.kind === "leaf" && level === depth - 1) || (col.kind === "collapsed" && level === col.collapsedLevel);
+                const queryKeys = col.kind === "leaf" ? col.keys.join("||") : col.key;
+
                 let span = 1;
                 let j = i + 1;
                 while (j < displayCols.length) {
@@ -1688,7 +1733,7 @@ export class Visual implements IVisual {
                     if (nLabel !== label || nKey !== key || nCollapsed !== collapsed) break;
                     span++; j++;
                 }
-                row.push({ label, span, key, togglable, collapsed });
+                row.push({ label, span, key, togglable, collapsed, isLeafHeader, queryKeys });
                 i = j;
             }
             // If a full header row yields no labels at all (e.g., due to a higher
@@ -1761,5 +1806,45 @@ export class Visual implements IVisual {
             const f = valueFormatter.create({ format: fmt });
             return f.format(v);
         } catch { return String(v); }
+    }
+
+    private sortRowsRecursive(nodes: DataViewMatrixNode[], valueKey: number, direction: "ASC" | "DESC") {
+        if (!nodes) return;
+        nodes.sort((a, b) => {
+            const valA = (a.values && a.values[valueKey]) ? a.values[valueKey].value : null;
+            const valB = (b.values && b.values[valueKey]) ? b.values[valueKey].value : null;
+            if (valA === valB) return 0;
+            if (valA == null) return 1;
+            if (valB == null) return -1;
+            if (valA < valB) return direction === "ASC" ? -1 : 1;
+            return direction === "ASC" ? 1 : -1;
+        });
+        for (const child of nodes) {
+            if (child.children) this.sortRowsRecursive(child.children, valueKey, direction);
+        }
+    }
+
+    private attachSortHandler(th: HTMLElement, queryKeys: string, measureIndex: number) {
+        th.style.cursor = "pointer";
+        const isSorted = this.sortState && this.sortState.queryKeys === queryKeys && this.sortState.measureIndex === measureIndex;
+        if (isSorted) {
+            const arrow = document.createElement("span");
+            arrow.className = "ghm-sort-icon";
+            arrow.textContent = this.sortState!.direction === "ASC" ? "▲" : "▼";
+            th.appendChild(arrow);
+        }
+        th.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (isSorted) {
+                if (this.sortState!.direction === "ASC") {
+                    this.sortState!.direction = "DESC";
+                } else {
+                    this.sortState = null;
+                }
+            } else {
+                this.sortState = { queryKeys, measureIndex, direction: "ASC" };
+            }
+            this.refresh();
+        });
     }
 }
