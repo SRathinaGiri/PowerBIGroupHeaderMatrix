@@ -798,7 +798,7 @@ export class Visual implements IVisual {
                         if (rowStyleColor) th.style.color = rowStyleColor;
                         if (this.rowHeaderBg) th.style.backgroundColor = this.rowHeaderBg;
                         this.applyGridBorder(th, true);
-                        if ((rowInfo as any).isTotal && (rowInfo as any).toggleKey && lvl === toggleLevel) {
+                        if ((rowInfo as any).toggleKey && lvl === toggleLevel) {
                             const toggle = document.createElement("span");
                             toggle.className = "ghm-toggle";
                             const collapsed = !!(rowInfo as any).collapsed;
