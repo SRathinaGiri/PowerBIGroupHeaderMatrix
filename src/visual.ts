@@ -481,7 +481,8 @@ export class Visual implements IVisual {
             }
         }
         const columnsHaveLevels = !!(columns.levels && columns.levels.length);
-        const measuresOnColumns = !!(columns.levels && columns.levels.length && columns.levels[0].sources && columns.levels[0].sources.some((s: any) => s && (s as any).isMeasure));
+        // Check if ANY level in columns is a measure. Power BI can place measures at any level (e.g. nested).
+        const measuresOnColumns = !!(columns.levels && columns.levels.some(lvl => lvl.sources && lvl.sources.some((s: any) => s && (s as any).isMeasure)));
         // If measures are already on the column axis, skip multiplying by measureCount
         const displayMeasureCount = measuresOnColumns ? 1 : Math.max(1, this.displayMeasureIndices.length);
         const resolveMeasureIndex = (ref: DisplayCol, displayIdx: number): number => {
