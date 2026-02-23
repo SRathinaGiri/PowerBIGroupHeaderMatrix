@@ -1057,65 +1057,44 @@ export class Visual implements IVisual {
 
                 // If measures are on columns, we must emit a column for EACH measure for the collapsed group.
                 if (measuresOnColumns && totalMeasureCount > 0) {
-                    const baseLabels = [...leaf.labels]; // Truncated or padded? leaf.labels is padded.
-                    // We want the label to be "Group Total" or similar.
-                    // It should probably show the Group label, and below it the Measure label.
-                    // But we are collapsed. So we hide levels below 'collapsedAt'.
-                    // We need to inject the measure name if possible?
-                    // Actually, if we just emit multiple cols, renderMatrix loop (m=0..displayMeasureCount) is 1.
-                    // So we must manually emit N cols.
+                    // Use the group's OWN children range if subtotalOffset is missing (which implies no separate subtotal node, so the group's children ARE the values)
+                    // If subtotalOffset IS present, it points to a subtotal sibling. We assume that sibling also has children measures.
+                    // The safer bet for "collapsed group showing measures" is to show the aggregated values.
+                    // If the group is collapsed, we usually show the "Total" column.
+                    // If "Total" column has children (measures), we need their offsets.
+                    // If subtotalOffset is found, use it (and assuming contiguous block).
+                    // If NOT found, it means no separate subtotal. We should fallback to the group's children?
+                    // But the group's children are the detailed items we wanted to hide!
+                    // Wait. If hierarchy is Region -> Measures. Collapsing Region -> Region Total.
+                    // The children of Region are [Sales, Profit].
+                    // So "Collapsed Region" IS just [Sales, Profit].
+                    // So we SHOULD use r.start as the base offset.
 
-                    // We don't have the measure names here easily unless we look them up.
-                    // We can reuse the leaf measure index logic?
-                    // The subtotal offset points to the group's subtotal node.
-                    // If that node has children (measures), values are at those children.
-                    // So we need offsets for those children.
-                    // This requires the subtotal node to be traversed.
-                    // `subtotalOffset` is just one number. It points to the leaf of the subtotal branch?
-                    // If the subtotal branch has multiple leaves (measures), `walk` should have visited them.
-                    // And `subtotalOffsetByKey` likely overwrote the previous one (last one wins).
-                    // Or we should have recorded *first* subtotal offset?
-                    // If `walk` visits Subtotal -> Sales (offset X), Subtotal -> Profit (offset X+1).
-                    // We want to capture the start of the subtotal block.
-
-                    // Since we can't easily jump to the subtotal's children offsets without more map data,
-                    // let's assume standard layout: subtotal leaves are contiguous.
-                    // We use `measureIndex` to iterate.
+                    const baseOffset = (subtotalOffset !== undefined) ? (subtotalOffset - (totalMeasureCount - 1)) : r.start;
 
                     for (let m = 0; m < totalMeasureCount; m++) {
-                        // For the label, we might want to append the measure name if available?
-                        // Or relying on the header renderer to show it.
-                        // But header renderer uses `col.labels`.
-                        // If we are collapsed at `level`, labels below are blank.
-                        // We should probably set the last label to the measure name if we can find it.
-                        // But we don't have it here.
-                        // Simple solution: emit columns, rely on `resolveMeasureIndex` to format?
+                        // Attempt to retrieve measure name for the header
+                        // We can't easily get it here without looking up valueSources.
+                        // We will inject it into the labels at the last level.
+                        const measureName = (this.lastMatrix && this.lastMatrix.valueSources && this.lastMatrix.valueSources[m])
+                            ? (this.lastMatrix.valueSources[m].displayName)
+                            : `Measure ${m+1}`;
 
-                        // We need `measureIndex` on the DisplayCol.
+                        const newLabels = [...leaf.labels];
+                        // If we are collapsed at r.level, the label at r.level is visible (Group Name).
+                        // Labels below are empty.
+                        // We should put the measure name at the LAST level (depth - 1).
+                        if (depth > 0) newLabels[depth - 1] = measureName;
 
-                        // Note: subtotalOffset is likely pointing to the LAST visited leaf of the subtotal branch
-                        // because `subtotalOffsetByKey.set` overwrites.
-                        // We need the FIRST one.
-                        // Let's assume we can calculate it relative to `m`?
-                        // If we assume subtotal leaves are ordered 0..M-1.
-                        // `subtotalOffset` (if last) is base + M - 1.
-                        // So base = subtotalOffset - (totalMeasureCount - 1) + m ?
-                        // This is risky.
-                        // Better: `subtotalOffset` points to *some* valid offset for the group.
-                        // If measuresOnColumns, the group subtotal *node* usually has values indexed by 0..M-1 ??
-                        // No, the values are on the row node, keyed by the column leaf index.
-                        // So we need the correct column leaf indices for the subtotal columns.
-
-                        // Let's optimistically emit entries.
                         result.push({
                             kind: "collapsed",
                             start: r.start,
                             end: r.end,
-                            labels: leaf.labels,
+                            labels: newLabels,
                             keys: leaf.keys,
                             collapsedLevel: r.level,
                             key: gkey,
-                            subtotalOffset: (subtotalOffset !== undefined) ? subtotalOffset - (totalMeasureCount - 1) + m : undefined, // Retroactive fix attempt?
+                            subtotalOffset: baseOffset + m,
                             measureIndex: m
                         });
                     }
