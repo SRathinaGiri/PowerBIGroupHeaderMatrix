@@ -747,40 +747,6 @@ export class Visual implements IVisual {
                     if (!baseBg && this.cellBg) baseBg = this.cellBg;
                     if (baseBg) td.style.backgroundColor = baseBg;
                     this.applyGridBorder(td, false);
-
-                    // Interaction
-                    if (!rowInfo.isTotal) {
-                        const rowNode = (rowInfo as any).node;
-                        if (rowNode) {
-                            const selectionId = this.createSelectionId(rowNode, undefined, undefined);
-
-                            // Selection state opacity
-                            const hasSelection = this.selectionManager.hasSelection();
-                            const isSelected = this.selectionManager.getSelectionIds().some(id => (id as any).equals(selectionId));
-                            if (hasSelection && !isSelected) {
-                                td.style.opacity = "0.5";
-                            } else {
-                                td.style.opacity = "1";
-                            }
-
-                            td.addEventListener("click", (e) => {
-                                this.selectionManager.select(selectionId, e.ctrlKey || e.metaKey).then(() => {
-                                    this.refresh();
-                                });
-                                e.stopPropagation();
-                            });
-                            td.addEventListener("contextmenu", (e) => {
-                                this.selectionManager.showContextMenu(selectionId, {x: e.clientX, y: e.clientY});
-                                e.preventDefault();
-                            });
-
-                            // Tooltip
-                            this.tooltipServiceWrapper.addTooltip(d3.select(td) as any, (tooltipEvent: TooltipEventArgs<TooltipEnabledDataPoint>) => {
-                                return this.getTooltipData(v, rowNode, undefined, globalM);
-                            }, () => selectionId);
-                        }
-                    }
-
                     tr.appendChild(td);
                 }
             }
@@ -955,6 +921,40 @@ export class Visual implements IVisual {
                     if (!baseBg && this.cellBg) baseBg = this.cellBg;
                     if (baseBg) td.style.backgroundColor = baseBg;
                     this.applyGridBorder(td, false);
+
+                    // Interaction (Multi-row mode)
+                    if (!rowInfo.isTotal) {
+                        const rowNode = (rowInfo as any).node;
+                        if (rowNode) {
+                            const selectionId = this.createSelectionId(rowNode, undefined, undefined);
+
+                            // Selection state opacity
+                            const hasSelection = this.selectionManager.hasSelection();
+                            const isSelected = this.selectionManager.getSelectionIds().some(id => (id as any).equals(selectionId));
+                            if (hasSelection && !isSelected) {
+                                td.style.opacity = "0.5";
+                            } else {
+                                td.style.opacity = "1";
+                            }
+
+                            td.addEventListener("click", (e) => {
+                                this.selectionManager.select(selectionId, e.ctrlKey || e.metaKey).then(() => {
+                                    this.refresh();
+                                });
+                                e.stopPropagation();
+                            });
+                            td.addEventListener("contextmenu", (e) => {
+                                this.selectionManager.showContextMenu(selectionId, {x: e.clientX, y: e.clientY});
+                                e.preventDefault();
+                            });
+
+                            // Tooltip
+                            this.tooltipServiceWrapper.addTooltip(d3.select(td) as any, (tooltipEvent: TooltipEventArgs<TooltipEnabledDataPoint>) => {
+                                return this.getTooltipData(v, rowNode, undefined, globalM);
+                            }, () => selectionId);
+                        }
+                    }
+
                     tr.appendChild(td);
                 }
             }
