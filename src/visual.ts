@@ -733,9 +733,9 @@ export class Visual implements IVisual {
                 for (let m = 0; m < displayMeasureCount; m++) {
                     const globalM = resolveMeasureIndex(columnLeaves[c], m);
                     const td = document.createElement("td");
-                    const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], globalM, totalCountForKeys);
+                    const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], globalM, totalCountForKeys, measuresOnColumns);
                     td.textContent = this.formatValueByMeasure(v, globalM);
-                    this.applyCellConditionalStyle(td, valuesMap as any, columnLeaves[c], globalM, totalCountForKeys);
+                    this.applyCellConditionalStyle(td, valuesMap as any, columnLeaves[c], globalM, totalCountForKeys, measuresOnColumns);
                     if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
                     if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
                     if (this.dataBold) td.style.fontWeight = "bold";
@@ -907,9 +907,9 @@ export class Visual implements IVisual {
                 for (let m = 0; m < displayMeasureCount; m++) {
                     const globalM = resolveMeasureIndex(columnLeaves[c], m);
                     const td = document.createElement("td");
-                    const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], globalM, totalCountForKeys);
+                    const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], globalM, totalCountForKeys, measuresOnColumns);
                     td.textContent = this.formatValueByMeasure(v, globalM);
-                    this.applyCellConditionalStyle(td, valuesMap as any, columnLeaves[c], globalM, totalCountForKeys);
+                    this.applyCellConditionalStyle(td, valuesMap as any, columnLeaves[c], globalM, totalCountForKeys, measuresOnColumns);
                     if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
                     if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
                     if (this.dataBold) td.style.fontWeight = "bold";
@@ -1174,12 +1174,14 @@ export class Visual implements IVisual {
         }
     }
 
-    private applyCellConditionalStyle(td: HTMLTableCellElement, valuesMap: { [key:number]: powerbi.DataViewMatrixNodeValue }, ref: DisplayCol, measureIndex: number, totalMeasureCount: number) {
+    private applyCellConditionalStyle(td: HTMLTableCellElement, valuesMap: { [key:number]: powerbi.DataViewMatrixNodeValue }, ref: DisplayCol, measureIndex: number, totalMeasureCount: number, measuresOnColumns: boolean) {
+        const calcKey = (offset: number) => measuresOnColumns ? offset : (offset * totalMeasureCount + measureIndex);
+
         let key: number | null = null;
-        if (ref.kind === 'leaf') key = ref.offset * totalMeasureCount + measureIndex;
+        if (ref.kind === 'leaf') key = calcKey(ref.offset);
         else {
             const coll = ref as any as { subtotalOffset?: number };
-            if (coll.subtotalOffset !== undefined) key = (coll.subtotalOffset as number) * totalMeasureCount + measureIndex;
+            if (coll.subtotalOffset !== undefined) key = calcKey(coll.subtotalOffset);
         }
         if (key == null) return;
         const cell = valuesMap[key];
@@ -1193,16 +1195,19 @@ export class Visual implements IVisual {
         // Measure-driven colors (per value)
         const tryMeasureColor = (mi: number): string | null => {
             if (mi < 0) return null;
-            if (ref.kind === "leaf") {
-                const colorKey = ref.offset * totalMeasureCount + mi;
-                const c = (valuesMap as any)[colorKey];
-                if (c && c.value != null) return String(c.value);
-            } else {
-                const coll = ref as any as { subtotalOffset?: number };
-                if (coll.subtotalOffset !== undefined) {
-                    const colorKey = (coll.subtotalOffset as number) * totalMeasureCount + mi;
+
+            if (!measuresOnColumns) {
+                if (ref.kind === "leaf") {
+                    const colorKey = ref.offset * totalMeasureCount + mi;
                     const c = (valuesMap as any)[colorKey];
                     if (c && c.value != null) return String(c.value);
+                } else {
+                    const coll = ref as any as { subtotalOffset?: number };
+                    if (coll.subtotalOffset !== undefined) {
+                        const colorKey = (coll.subtotalOffset as number) * totalMeasureCount + mi;
+                        const c = (valuesMap as any)[colorKey];
+                        if (c && c.value != null) return String(c.value);
+                    }
                 }
             }
             return null;
@@ -1838,16 +1843,16 @@ export class Visual implements IVisual {
         window.addEventListener("mouseup", onUp);
     }
 
-    private getCellValueForDisplayCol(valuesMap: { [key: number]: powerbi.DataViewMatrixNodeValue }, numericKeys: number[], ref: DisplayCol, measureIndex: number, totalMeasureCount: number): any {
+    private getCellValueForDisplayCol(valuesMap: { [key: number]: powerbi.DataViewMatrixNodeValue }, numericKeys: number[], ref: DisplayCol, measureIndex: number, totalMeasureCount: number, measuresOnColumns: boolean): any {
+        const calcKey = (offset: number) => measuresOnColumns ? offset : (offset * totalMeasureCount + measureIndex);
+
         if (ref.kind === "leaf") {
-            const prefKey = ref.offset * totalMeasureCount + measureIndex;
+            const prefKey = calcKey(ref.offset);
             const preferredCell = valuesMap[prefKey];
             if (preferredCell && preferredCell.value != null) return preferredCell.value;
             if (numericKeys.length) {
-                const idx = ref.offset * totalMeasureCount + measureIndex;
-                const altKey = numericKeys[idx] ?? numericKeys[idx % numericKeys.length];
-                const altCell = valuesMap[altKey];
-                if (altCell && altCell.value != null) return altCell.value;
+                // If strict lookup failed, try fallback (though with calcKey this is less likely to be needed/correct)
+                // We'll trust calcKey primarily.
             }
             return "";
         } else {
@@ -1855,7 +1860,7 @@ export class Visual implements IVisual {
             // subtotal leaf for this column group (subtotalOffset). Otherwise blank.
             const coll = ref as any as { subtotalOffset?: number };
             if (coll.subtotalOffset !== undefined) {
-                const key = (coll.subtotalOffset as number) * totalMeasureCount + measureIndex;
+                const key = calcKey(coll.subtotalOffset);
                 const cell = valuesMap[key];
                 return (cell && cell.value != null) ? cell.value : "";
             }
