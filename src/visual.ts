@@ -1019,13 +1019,11 @@ export class Visual implements IVisual {
 
                 let measureIndex: number | undefined = undefined;
                 if (measuresOnColumns) {
-                    // Try to deduce from siblings?
-                    // Let's assume standard traversal order matches measure order.
-                    // This leaf's measure index is determined by its position in the deepest level.
-                    // This is hard to know locally without knowing parent's children index.
-                    // However, we can simply assign `offset % totalMeasureCount` IF the grid is full.
-                    // But `offset` increments.
                     measureIndex = offset % totalMeasureCount;
+                    // Fix missing measure label if nodeLabel returned empty
+                    if ((!newLabels[depth - 1] || newLabels[depth - 1] === "") && this.lastMatrix && this.lastMatrix.valueSources && this.lastMatrix.valueSources[measureIndex]) {
+                        newLabels[depth - 1] = this.lastMatrix.valueSources[measureIndex].displayName;
+                    }
                 }
 
                 leaves.push({ offset, labels: newLabels, keys: newKeys, collapsedAt, measureIndex });
@@ -1053,23 +1051,16 @@ export class Visual implements IVisual {
             if (leaf.collapsedAt !== null) {
                 const gkey = leaf.keys.slice(0, leaf.collapsedAt + 1).filter(Boolean).join("||");
                 const r = ranges.get(gkey)!;
-                const subtotalOffset = subtotalOffsetByKey.get(gkey);
+                // Try specific subtotal keys first (standard "Total" or "Grand Total" suffix)
+                let subtotalOffset = subtotalOffsetByKey.get(gkey + "||Total");
+                if (subtotalOffset === undefined) subtotalOffset = subtotalOffsetByKey.get(gkey + "||Grand Total");
+                if (subtotalOffset === undefined) subtotalOffset = subtotalOffsetByKey.get(gkey); // Fallback to direct key if subtotal was mapped directly
 
                 // If measures are on columns, we must emit a column for EACH measure for the collapsed group.
                 if (measuresOnColumns && totalMeasureCount > 0) {
-                    // Use the group's OWN children range if subtotalOffset is missing (which implies no separate subtotal node, so the group's children ARE the values)
-                    // If subtotalOffset IS present, it points to a subtotal sibling. We assume that sibling also has children measures.
-                    // The safer bet for "collapsed group showing measures" is to show the aggregated values.
-                    // If the group is collapsed, we usually show the "Total" column.
-                    // If "Total" column has children (measures), we need their offsets.
-                    // If subtotalOffset is found, use it (and assuming contiguous block).
-                    // If NOT found, it means no separate subtotal. We should fallback to the group's children?
-                    // But the group's children are the detailed items we wanted to hide!
-                    // Wait. If hierarchy is Region -> Measures. Collapsing Region -> Region Total.
-                    // The children of Region are [Sales, Profit].
-                    // So "Collapsed Region" IS just [Sales, Profit].
-                    // So we SHOULD use r.start as the base offset.
-
+                    // Use the group's OWN children range if subtotalOffset is missing.
+                    // If subtotalOffset is valid, it points to the LAST measure of the subtotal block.
+                    // We calculate baseOffset to point to the FIRST measure.
                     const baseOffset = (subtotalOffset !== undefined) ? (subtotalOffset - (totalMeasureCount - 1)) : r.start;
 
                     for (let m = 0; m < totalMeasureCount; m++) {
