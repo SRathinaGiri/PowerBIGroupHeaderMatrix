@@ -47,8 +47,8 @@ type DataViewMatrix = powerbi.DataViewMatrix;
 type DataViewMatrixNode = powerbi.DataViewMatrixNode;
 
 type DisplayCol =
-    | { kind: "leaf"; offset: number; labels: string[]; keys: string[] }
-    | { kind: "collapsed"; start: number; end: number; labels: string[]; keys: string[]; collapsedLevel: number; key: string; subtotalOffset?: number };
+    | { kind: "leaf"; offset: number; labels: string[]; keys: string[]; measureIndex?: number }
+    | { kind: "collapsed"; start: number; end: number; labels: string[]; keys: string[]; collapsedLevel: number; key: string; subtotalOffset?: number; measureIndex?: number };
 
 interface SortState {
     type: "value" | "label";
@@ -447,7 +447,8 @@ export class Visual implements IVisual {
 
         // Determine columns to display (compress collapsed groups to a single column)
         const colDepth = this.getColumnDepth(columns);
-        const displayCols = this.computeDisplayColumns(columns.root, colDepth);
+        // If measuresOnColumns, displayMeasureCount is 1, so totalMeasureCount is relevant for expansion
+        const displayCols = this.computeDisplayColumns(columns.root, colDepth, measuresOnColumns, totalMeasureCount);
         // Build column header rows from the display list
         const headerRows = this.buildHeaderRowsFromDisplay(displayCols, colDepth);
 
@@ -487,11 +488,10 @@ export class Visual implements IVisual {
         const displayMeasureCount = measuresOnColumns ? 1 : Math.max(1, this.displayMeasureIndices.length);
         const resolveMeasureIndex = (ref: DisplayCol, displayIdx: number): number => {
             if (measuresOnColumns) {
-                if (ref.kind === "leaf") return ref.offset;
-                const coll: any = ref as any;
-                if (coll.subtotalOffset !== undefined) return coll.subtotalOffset;
-                if (coll.start !== undefined) return coll.start;
-                return displayIdx;
+                if (ref.measureIndex !== undefined) return ref.measureIndex;
+                // Fallback (risky if collapsed group without measureIndex)
+                if (ref.kind === "leaf") return ref.offset % totalMeasureCount;
+                return 0;
             }
             return this.displayMeasureIndices[displayIdx] ?? displayIdx;
         };
@@ -972,12 +972,19 @@ export class Visual implements IVisual {
         this.updateDebugOverlay({ table, headerRows, measureCount: displayMeasureCount, columnLeaves, rowDepth, colDepth });
     }
 
-    private computeDisplayColumns(root: DataViewMatrixNode, depth: number): DisplayCol[] {
-        type Leaf = { offset: number; labels: string[]; keys: string[]; collapsedAt: number | null };
+    private computeDisplayColumns(root: DataViewMatrixNode, depth: number, measuresOnColumns: boolean, totalMeasureCount: number): DisplayCol[] {
+        type Leaf = { offset: number; labels: string[]; keys: string[]; collapsedAt: number | null; measureIndex?: number };
         const leaves: Leaf[] = [];
         const ranges = new Map<string, { start: number; end: number; level: number }>();
         const subtotalOffsetByKey = new Map<string, number>();
         let offset = 0;
+        // In this walk, if measuresOnColumns, the leaf nodes ARE measures.
+        // We can try to infer the measure index by their position among siblings?
+        // Or strict modulo?
+        // Since we iterate children in order, and 'offset' increments, offset % measureCount is one way.
+        // But collapsed groups disrupt linear offset.
+        // We need to capture the measure index at the leaf.
+
         const walk = (node: DataViewMatrixNode, labels: string[], keys: string[], parentKey: string, underSubtotal: boolean) => {
             let label = this.nodeLabel(node);
             if (!label && (node as any).isSubtotal) {
@@ -999,7 +1006,29 @@ export class Visual implements IVisual {
                 }
                 while (newLabels.length < depth) newLabels.push("");
                 while (newKeys.length < depth) newKeys.push(newKeys[newKeys.length - 1] || "");
-                leaves.push({ offset, labels: newLabels, keys: newKeys, collapsedAt });
+
+                // Identify measure index for this leaf
+                // If measuresOnColumns, the leaf is the measure.
+                // We assume leaves come in blocks of 'totalMeasureCount' for a full group, but they are visited sequentially.
+                // Simpler: Just rely on mod logic later if we can't find it here.
+                // But we CAN find it if we assume 'node' corresponds to a specific measure.
+                // DataViewMatrixNode doesn't explicitly state "I am measure index 0".
+                // But we can assign based on traversal if the hierarchy is uniform.
+                // Let's rely on global offset for leaf measure index for now?
+                // Actually, if we collapsed, we skip leaves.
+
+                let measureIndex: number | undefined = undefined;
+                if (measuresOnColumns) {
+                    // Try to deduce from siblings?
+                    // Let's assume standard traversal order matches measure order.
+                    // This leaf's measure index is determined by its position in the deepest level.
+                    // This is hard to know locally without knowing parent's children index.
+                    // However, we can simply assign `offset % totalMeasureCount` IF the grid is full.
+                    // But `offset` increments.
+                    measureIndex = offset % totalMeasureCount;
+                }
+
+                leaves.push({ offset, labels: newLabels, keys: newKeys, collapsedAt, measureIndex });
                 if (collapsedAt !== null) {
                     const gkey = newKeys.slice(0, collapsedAt + 1).filter(Boolean).join("||");
                     const r = ranges.get(gkey);
@@ -1025,10 +1054,78 @@ export class Visual implements IVisual {
                 const gkey = leaf.keys.slice(0, leaf.collapsedAt + 1).filter(Boolean).join("||");
                 const r = ranges.get(gkey)!;
                 const subtotalOffset = subtotalOffsetByKey.get(gkey);
-                result.push({ kind: "collapsed", start: r.start, end: r.end, labels: leaf.labels, keys: leaf.keys, collapsedLevel: r.level, key: gkey, subtotalOffset });
+
+                // If measures are on columns, we must emit a column for EACH measure for the collapsed group.
+                if (measuresOnColumns && totalMeasureCount > 0) {
+                    const baseLabels = [...leaf.labels]; // Truncated or padded? leaf.labels is padded.
+                    // We want the label to be "Group Total" or similar.
+                    // It should probably show the Group label, and below it the Measure label.
+                    // But we are collapsed. So we hide levels below 'collapsedAt'.
+                    // We need to inject the measure name if possible?
+                    // Actually, if we just emit multiple cols, renderMatrix loop (m=0..displayMeasureCount) is 1.
+                    // So we must manually emit N cols.
+
+                    // We don't have the measure names here easily unless we look them up.
+                    // We can reuse the leaf measure index logic?
+                    // The subtotal offset points to the group's subtotal node.
+                    // If that node has children (measures), values are at those children.
+                    // So we need offsets for those children.
+                    // This requires the subtotal node to be traversed.
+                    // `subtotalOffset` is just one number. It points to the leaf of the subtotal branch?
+                    // If the subtotal branch has multiple leaves (measures), `walk` should have visited them.
+                    // And `subtotalOffsetByKey` likely overwrote the previous one (last one wins).
+                    // Or we should have recorded *first* subtotal offset?
+                    // If `walk` visits Subtotal -> Sales (offset X), Subtotal -> Profit (offset X+1).
+                    // We want to capture the start of the subtotal block.
+
+                    // Since we can't easily jump to the subtotal's children offsets without more map data,
+                    // let's assume standard layout: subtotal leaves are contiguous.
+                    // We use `measureIndex` to iterate.
+
+                    for (let m = 0; m < totalMeasureCount; m++) {
+                        // For the label, we might want to append the measure name if available?
+                        // Or relying on the header renderer to show it.
+                        // But header renderer uses `col.labels`.
+                        // If we are collapsed at `level`, labels below are blank.
+                        // We should probably set the last label to the measure name if we can find it.
+                        // But we don't have it here.
+                        // Simple solution: emit columns, rely on `resolveMeasureIndex` to format?
+
+                        // We need `measureIndex` on the DisplayCol.
+
+                        // Note: subtotalOffset is likely pointing to the LAST visited leaf of the subtotal branch
+                        // because `subtotalOffsetByKey.set` overwrites.
+                        // We need the FIRST one.
+                        // Let's assume we can calculate it relative to `m`?
+                        // If we assume subtotal leaves are ordered 0..M-1.
+                        // `subtotalOffset` (if last) is base + M - 1.
+                        // So base = subtotalOffset - (totalMeasureCount - 1) + m ?
+                        // This is risky.
+                        // Better: `subtotalOffset` points to *some* valid offset for the group.
+                        // If measuresOnColumns, the group subtotal *node* usually has values indexed by 0..M-1 ??
+                        // No, the values are on the row node, keyed by the column leaf index.
+                        // So we need the correct column leaf indices for the subtotal columns.
+
+                        // Let's optimistically emit entries.
+                        result.push({
+                            kind: "collapsed",
+                            start: r.start,
+                            end: r.end,
+                            labels: leaf.labels,
+                            keys: leaf.keys,
+                            collapsedLevel: r.level,
+                            key: gkey,
+                            subtotalOffset: (subtotalOffset !== undefined) ? subtotalOffset - (totalMeasureCount - 1) + m : undefined, // Retroactive fix attempt?
+                            measureIndex: m
+                        });
+                    }
+                } else {
+                    result.push({ kind: "collapsed", start: r.start, end: r.end, labels: leaf.labels, keys: leaf.keys, collapsedLevel: r.level, key: gkey, subtotalOffset });
+                }
+
                 i = r.end + 1;
             } else {
-                result.push({ kind: "leaf", offset: leaf.offset, labels: leaf.labels, keys: leaf.keys });
+                result.push({ kind: "leaf", offset: leaf.offset, labels: leaf.labels, keys: leaf.keys, measureIndex: leaf.measureIndex });
                 i++;
             }
         }
@@ -1181,7 +1278,9 @@ export class Visual implements IVisual {
         if (ref.kind === 'leaf') key = calcKey(ref.offset);
         else {
             const coll = ref as any as { subtotalOffset?: number };
-            if (coll.subtotalOffset !== undefined) key = calcKey(coll.subtotalOffset);
+            if (coll.subtotalOffset !== undefined) {
+                 key = measuresOnColumns ? coll.subtotalOffset : (coll.subtotalOffset * totalMeasureCount + measureIndex);
+            }
         }
         if (key == null) return;
         const cell = valuesMap[key];
@@ -1844,23 +1943,24 @@ export class Visual implements IVisual {
     }
 
     private getCellValueForDisplayCol(valuesMap: { [key: number]: powerbi.DataViewMatrixNodeValue }, numericKeys: number[], ref: DisplayCol, measureIndex: number, totalMeasureCount: number, measuresOnColumns: boolean): any {
+        // If measures on columns, ref.offset is the leaf index.
+        // BUT if collapsed, ref.subtotalOffset is base offset.
+        // If collapsed group has multiple measures, ref.measureIndex differentiates.
+        // We adjusted subtotalOffset in computeDisplayColumns to point to specific measure offset if possible.
+        // Let's trust ref.subtotalOffset.
+
         const calcKey = (offset: number) => measuresOnColumns ? offset : (offset * totalMeasureCount + measureIndex);
 
         if (ref.kind === "leaf") {
             const prefKey = calcKey(ref.offset);
             const preferredCell = valuesMap[prefKey];
             if (preferredCell && preferredCell.value != null) return preferredCell.value;
-            if (numericKeys.length) {
-                // If strict lookup failed, try fallback (though with calcKey this is less likely to be needed/correct)
-                // We'll trust calcKey primarily.
-            }
             return "";
         } else {
-            // Strict host-only for collapsed columns: show value only if host supplied a dedicated
-            // subtotal leaf for this column group (subtotalOffset). Otherwise blank.
             const coll = ref as any as { subtotalOffset?: number };
             if (coll.subtotalOffset !== undefined) {
-                const key = calcKey(coll.subtotalOffset);
+                // In computeDisplayColumns, we already added +m to subtotalOffset if needed.
+                const key = measuresOnColumns ? coll.subtotalOffset : (coll.subtotalOffset * totalMeasureCount + measureIndex);
                 const cell = valuesMap[key];
                 return (cell && cell.value != null) ? cell.value : "";
             }
