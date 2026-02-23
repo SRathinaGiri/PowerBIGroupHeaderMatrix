@@ -445,13 +445,6 @@ export class Visual implements IVisual {
         const thead = document.createElement("thead");
         const tbody = document.createElement("tbody");
 
-        // Determine columns to display (compress collapsed groups to a single column)
-        const colDepth = this.getColumnDepth(columns);
-        // If measuresOnColumns, displayMeasureCount is 1, so totalMeasureCount is relevant for expansion
-        const displayCols = this.computeDisplayColumns(columns.root, colDepth, measuresOnColumns, totalMeasureCount);
-        // Build column header rows from the display list
-        const headerRows = this.buildHeaderRowsFromDisplay(displayCols, colDepth);
-
         // Measures handling: compute display measures vs style measures
         const totalMeasureCount = (matrix.valueSources && matrix.valueSources.length) ? matrix.valueSources.length : 0;
         this.displayMeasureIndices = [];
@@ -484,6 +477,13 @@ export class Visual implements IVisual {
         const columnsHaveLevels = !!(columns.levels && columns.levels.length);
         // Check if ANY level in columns is a measure. Power BI can place measures at any level (e.g. nested).
         const measuresOnColumns = !!(columns.levels && columns.levels.some(lvl => lvl.sources && lvl.sources.some((s: any) => s && (s as any).isMeasure)));
+
+        // Determine columns to display (compress collapsed groups to a single column)
+        const colDepth = this.getColumnDepth(columns);
+        // If measuresOnColumns, displayMeasureCount is 1, so totalMeasureCount is relevant for expansion
+        const displayCols = this.computeDisplayColumns(columns.root, colDepth, measuresOnColumns, totalMeasureCount);
+        // Build column header rows from the display list
+        const headerRows = this.buildHeaderRowsFromDisplay(displayCols, colDepth);
         // If measures are already on the column axis, skip multiplying by measureCount
         const displayMeasureCount = measuresOnColumns ? 1 : Math.max(1, this.displayMeasureIndices.length);
         const resolveMeasureIndex = (ref: DisplayCol, displayIdx: number): number => {
