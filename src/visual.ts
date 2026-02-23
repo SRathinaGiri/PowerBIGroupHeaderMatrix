@@ -29,6 +29,7 @@ import powerbi from "powerbi-visuals-api";
 import { FormattingSettingsService } from "powerbi-visuals-utils-formattingmodel";
 import { valueFormatter } from "powerbi-visuals-utils-formattingutils";
 import { createTooltipServiceWrapper, ITooltipServiceWrapper, TooltipEventArgs, TooltipEnabledDataPoint } from "powerbi-visuals-utils-tooltiputils";
+import * as d3 from "d3-selection";
 import VisualTooltipDataItem = powerbi.extensibility.VisualTooltipDataItem;
 import "./../style/visual.less";
 
@@ -774,7 +775,7 @@ export class Visual implements IVisual {
                             });
 
                             // Tooltip
-                            this.tooltipServiceWrapper.addTooltip(td, (tooltipEvent: TooltipEventArgs) => {
+                            this.tooltipServiceWrapper.addTooltip(d3.select(td) as any, (tooltipEvent: TooltipEventArgs<TooltipEnabledDataPoint>) => {
                                 return this.getTooltipData(v, rowNode, undefined, globalM);
                             }, selectionId);
                         }
