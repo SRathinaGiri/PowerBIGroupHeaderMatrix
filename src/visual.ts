@@ -28,11 +28,15 @@
 import powerbi from "powerbi-visuals-api";
 import { FormattingSettingsService } from "powerbi-visuals-utils-formattingmodel";
 import { valueFormatter } from "powerbi-visuals-utils-formattingutils";
+import { createTooltipServiceWrapper, ITooltipServiceWrapper, TooltipEventArgs, TooltipEnabledDataPoint } from "powerbi-visuals-utils-tooltiputils";
+import VisualTooltipDataItem = powerbi.extensibility.VisualTooltipDataItem;
 import "./../style/visual.less";
 
 import VisualConstructorOptions = powerbi.extensibility.visual.VisualConstructorOptions;
 import VisualUpdateOptions = powerbi.extensibility.visual.VisualUpdateOptions;
 import IVisual = powerbi.extensibility.visual.IVisual;
+import ISelectionManager = powerbi.extensibility.ISelectionManager;
+import ISelectionId = powerbi.visuals.ISelectionId;
 
 import { VisualFormattingSettingsModel } from "./settings";
 import IVisualHost = powerbi.extensibility.visual.IVisualHost;
@@ -111,6 +115,8 @@ export class Visual implements IVisual {
     private sortState: SortState | null = null;
 
     private host: IVisualHost;
+    private selectionManager: ISelectionManager;
+    private tooltipServiceWrapper: ITooltipServiceWrapper;
     private resizeObserver: ResizeObserver | null = null;
     // Totals behavior
     private showGrandTotal: boolean = true;
@@ -122,6 +128,8 @@ export class Visual implements IVisual {
     constructor(options: VisualConstructorOptions) {
         this.formattingSettingsService = new FormattingSettingsService();
         this.host = options.host;
+        this.selectionManager = options.host.createSelectionManager();
+        this.tooltipServiceWrapper = createTooltipServiceWrapper(options.host.tooltipService, options.element);
 
         // Root flex container
         this.root = document.createElement("div");
@@ -738,6 +746,40 @@ export class Visual implements IVisual {
                     if (!baseBg && this.cellBg) baseBg = this.cellBg;
                     if (baseBg) td.style.backgroundColor = baseBg;
                     this.applyGridBorder(td, false);
+
+                    // Interaction
+                    if (!rowInfo.isTotal) {
+                        const rowNode = (rowInfo as any).node;
+                        if (rowNode) {
+                            const selectionId = this.createSelectionId(rowNode, undefined, undefined);
+
+                            // Selection state opacity
+                            const hasSelection = this.selectionManager.hasSelection();
+                            const isSelected = this.selectionManager.getSelectionIds().some(id => id.equals(selectionId));
+                            if (hasSelection && !isSelected) {
+                                td.style.opacity = "0.5";
+                            } else {
+                                td.style.opacity = "1";
+                            }
+
+                            td.addEventListener("click", (e) => {
+                                this.selectionManager.select(selectionId, e.ctrlKey || e.metaKey).then(() => {
+                                    this.refresh();
+                                });
+                                e.stopPropagation();
+                            });
+                            td.addEventListener("contextmenu", (e) => {
+                                this.selectionManager.showContextMenu(selectionId, {x: e.clientX, y: e.clientY});
+                                e.preventDefault();
+                            });
+
+                            // Tooltip
+                            this.tooltipServiceWrapper.addTooltip(td, (tooltipEvent: TooltipEventArgs) => {
+                                return this.getTooltipData(v, rowNode, undefined, globalM);
+                            }, selectionId);
+                        }
+                    }
+
                     tr.appendChild(td);
                 }
             }
@@ -1087,6 +1129,14 @@ export class Visual implements IVisual {
         });
     }
 
+    private createSelectionId(rowNode: DataViewMatrixNode, colNode?: DataViewMatrixNode, measureIndex?: number): ISelectionId {
+        const builder = this.host.createSelectionIdBuilder();
+        if (rowNode) builder.withMatrixNode(rowNode, this.lastMatrix!.rows.levels!);
+        if (colNode && this.lastMatrix!.columns.levels) builder.withMatrixNode(colNode, this.lastMatrix!.columns.levels);
+        if (measureIndex !== undefined) builder.withMeasure(this.lastMatrix!.valueSources![measureIndex].queryName);
+        return builder.createSelectionId();
+    }
+
     private getObjectValue<T>(objects: powerbi.DataViewObjects | undefined, objectName: string, propertyName: string, defaultValue: T): T {
         const obj = objects && (objects as any)[objectName];
         const v = obj && obj[propertyName];
@@ -1408,9 +1458,9 @@ export class Visual implements IVisual {
         return rows;
     }
 
-    private collectOutlineRowsWithTotals(root: DataViewMatrixNode, rowDepth: number): Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean; toggles?: { [key: number]: string } }> {
-        const rows: Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean; toggles?: { [key: number]: string } }> = [];
-        const grandTotalRows: Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean; toggles?: { [key: number]: string } }> = [];
+    private collectOutlineRowsWithTotals(root: DataViewMatrixNode, rowDepth: number): Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean; toggles?: { [key: number]: string }; node?: DataViewMatrixNode }> {
+        const rows: Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean; toggles?: { [key: number]: string }; node?: DataViewMatrixNode }> = [];
+        const grandTotalRows: Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean; toggles?: { [key: number]: string }; node?: DataViewMatrixNode }> = [];
         const tryRootTotal = () => {
             if (!this.showGrandTotal) return;
             const subtotalChild = root.children && (root.children as any[]).find(ch => (ch as any).isSubtotal);
@@ -1534,7 +1584,7 @@ export class Visual implements IVisual {
                     return;
                 } else {
                     // Leaf in compact mode
-                    rows.push({ labels, valuesMap: node.values as any, isTotal: false });
+                    rows.push({ labels, valuesMap: node.values as any, isTotal: false, node });
                     return;
                 }
             }
@@ -1619,7 +1669,7 @@ export class Visual implements IVisual {
             const labels = new Array(rowDepth).fill("");
             for (let i = 0; i < path.length; i++) labels[i] = path[i];
             labels[depth] = label;
-            rows.push({ labels, valuesMap: node.values as any, isTotal: false });
+            rows.push({ labels, valuesMap: node.values as any, isTotal: false, node });
         };
 
         traverse(root, 0, [], []);
@@ -1889,5 +1939,48 @@ export class Visual implements IVisual {
             }
             this.refresh();
         });
+    }
+
+    private getTooltipData(value: any, rowNode: DataViewMatrixNode, colNode: DataViewMatrixNode | undefined, measureIndex: number): VisualTooltipDataItem[] {
+        const res: VisualTooltipDataItem[] = [];
+
+        // Rows
+        if (rowNode) {
+            // Ancestors?
+            // The node structure doesn't easily link back to parents.
+            // But we can use levelValues if available or simple node value.
+            // For a flat list of headers, we need to reconstruct the path or iterate ancestors if available.
+            // DataViewMatrixNode doesn't have 'parent'.
+            // However, we can just show the current node's label and its level name.
+            if (this.lastMatrix && this.lastMatrix.rows && this.lastMatrix.rows.levels && rowNode.level !== undefined) {
+                const levelName = this.lastMatrix.rows.levels[rowNode.level].sources[0].displayName;
+                res.push({
+                    displayName: levelName,
+                    value: this.nodeLabel(rowNode)
+                });
+            } else {
+                 res.push({
+                    displayName: "Row",
+                    value: this.nodeLabel(rowNode)
+                });
+            }
+        }
+
+        // Columns
+        // If we had the column node... (not passed yet, need to enhance later if crucial)
+        // For now, simple measure
+        if (this.lastMatrix && this.lastMatrix.valueSources && this.lastMatrix.valueSources[measureIndex]) {
+            res.push({
+                displayName: this.lastMatrix.valueSources[measureIndex].displayName,
+                value: this.formatValueByMeasure(value, measureIndex)
+            });
+        } else {
+             res.push({
+                displayName: "Value",
+                value: String(value)
+            });
+        }
+
+        return res;
     }
 }
