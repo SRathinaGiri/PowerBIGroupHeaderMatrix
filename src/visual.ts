@@ -756,7 +756,7 @@ export class Visual implements IVisual {
 
                             // Selection state opacity
                             const hasSelection = this.selectionManager.hasSelection();
-                            const isSelected = this.selectionManager.getSelectionIds().some(id => id.equals(selectionId));
+                            const isSelected = this.selectionManager.getSelectionIds().some(id => (id as any).equals(selectionId));
                             if (hasSelection && !isSelected) {
                                 td.style.opacity = "0.5";
                             } else {
@@ -777,7 +777,7 @@ export class Visual implements IVisual {
                             // Tooltip
                             this.tooltipServiceWrapper.addTooltip(d3.select(td) as any, (tooltipEvent: TooltipEventArgs<TooltipEnabledDataPoint>) => {
                                 return this.getTooltipData(v, rowNode, undefined, globalM);
-                            }, selectionId);
+                            }, () => selectionId);
                         }
                     }
 
