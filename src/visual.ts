@@ -1020,8 +1020,8 @@ export class Visual implements IVisual {
                 let measureIndex: number | undefined = undefined;
                 if (measuresOnColumns) {
                     measureIndex = offset % totalMeasureCount;
-                    // Fix missing measure label if nodeLabel returned empty
-                    if ((!newLabels[depth - 1] || newLabels[depth - 1] === "") && this.lastMatrix && this.lastMatrix.valueSources && this.lastMatrix.valueSources[measureIndex]) {
+                    // Always use the measure name for the label when measures are on columns
+                    if (this.lastMatrix && this.lastMatrix.valueSources && this.lastMatrix.valueSources[measureIndex]) {
                         newLabels[depth - 1] = this.lastMatrix.valueSources[measureIndex].displayName;
                     }
                 }
