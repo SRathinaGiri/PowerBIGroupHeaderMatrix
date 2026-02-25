@@ -84,7 +84,7 @@ export class Visual implements IVisual {
     private colHeaderFontSize: number = 11;
     private colHeaderFontFamily: string = "";
     private colHeaderBold: boolean = false;
-    private compactLayout: boolean = false;
+    private compactLayout: boolean = true;
     private measureFormats: string[] = [];
     private displayMeasureIndices: number[] = [];
     private cellBgColorMeasureIndices: number[] = [];
@@ -258,7 +258,7 @@ export class Visual implements IVisual {
         const sticky = this.getObjectValue<boolean>(dataView?.metadata?.objects, "state", "stickyHeaders", true);
         this.container.classList.toggle("ghm-sticky", !!sticky);
         this.repeatLabels = this.getObjectValue<boolean>(dataView?.metadata?.objects, "state", "repeatLabels", false);
-        this.compactLayout = this.getObjectValue<boolean>(dataView?.metadata?.objects, "state", "compactLayout", false);
+        this.compactLayout = this.getObjectValue<boolean>(dataView?.metadata?.objects, "state", "compactLayout", true);
         if (this.compactLayout) this.repeatLabels = false;
         // Grand total formatting options
         this.showGrandTotal = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "show", true);
@@ -1859,7 +1859,9 @@ export class Visual implements IVisual {
             let i = 0;
             while (i < displayCols.length) {
                 const col = displayCols[i];
-                const label = col.kind === "leaf" ? col.labels[level] : (level < col.collapsedLevel ? col.labels[level] : (level === col.collapsedLevel ? col.labels[level] : ""));
+                const label = col.kind === "leaf" ? col.labels[level] : (
+                    (level <= col.collapsedLevel || (col.measureIndex !== undefined && level === depth - 1))
+                        ? col.labels[level] : "");
                 const key = col.keys[level] || "";
                 const collapsed = col.kind === "collapsed" && level === col.collapsedLevel ? true : this.collapsedColKeys.has(key) && level < depth - 1;
                 // Avoid showing a bare +/- toggle with no label when an upper level
