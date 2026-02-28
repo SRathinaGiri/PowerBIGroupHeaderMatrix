@@ -159,5 +159,24 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
         slices: Array<FormattingSettingsSlice> = [this.enabled, this.oddColor, this.evenColor];
     }();
 
-    cards = [this.behaviorCard, this.labelsCard, this.colorsCard, this.gridCard, this.zebraCard, this.zebraColsCard, this.subtotalsCard, this.grandTotalCard];
+    themeCard = new class extends FormattingSettingsCard {
+        presetItems = [
+            { value: "Default", displayName: "Default" },
+            { value: "Light Blue", displayName: "Light Blue" },
+            { value: "Dark", displayName: "Dark" },
+            { value: "Excel-like", displayName: "Excel-like" },
+            { value: "Modern", displayName: "Modern" }
+        ];
+        preset = new ItemDropdown({
+            name: "preset",
+            displayName: "Preset",
+            value: { value: "Default", displayName: "Default" },
+            items: this.presetItems
+        });
+        name: string = "theme";
+        displayName: string = "Theme";
+        slices: Array<FormattingSettingsSlice> = [this.preset];
+    }();
+
+    cards = [this.behaviorCard, this.labelsCard, this.colorsCard, this.gridCard, this.zebraCard, this.zebraColsCard, this.subtotalsCard, this.grandTotalCard, this.themeCard];
 }

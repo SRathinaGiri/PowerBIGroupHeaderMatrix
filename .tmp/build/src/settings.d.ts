@@ -197,6 +197,29 @@ export declare class VisualFormattingSettingsModel extends FormattingSettingsMod
         description?: string;
         descriptionKey?: string;
     };
+    themeCard: {
+        presetItems: {
+            value: string;
+            displayName: string;
+        }[];
+        preset: formattingSettings.ItemDropdown;
+        name: string;
+        displayName: string;
+        slices: Array<FormattingSettingsSlice>;
+        analyticsPane?: boolean;
+        onPreProcess?(): void;
+        container?: formattingSettings.Container;
+        disabled?: boolean;
+        disabledReason?: string;
+        disabledReasonKey?: string;
+        delaySaveSlices?: boolean;
+        collapsible?: boolean;
+        visible?: boolean;
+        topLevelSlice?: formattingSettings.SimpleSlice;
+        displayNameKey?: string;
+        description?: string;
+        descriptionKey?: string;
+    };
     cards: ({
         stickyHeaders: formattingSettings.ToggleSwitch;
         pageSize: formattingSettings.NumUpDown;
@@ -364,6 +387,28 @@ export declare class VisualFormattingSettingsModel extends FormattingSettingsMod
             displayName: string;
         }[];
         position: formattingSettings.ItemDropdown;
+        name: string;
+        displayName: string;
+        slices: Array<FormattingSettingsSlice>;
+        analyticsPane?: boolean;
+        onPreProcess?(): void;
+        container?: formattingSettings.Container;
+        disabled?: boolean;
+        disabledReason?: string;
+        disabledReasonKey?: string;
+        delaySaveSlices?: boolean;
+        collapsible?: boolean;
+        visible?: boolean;
+        topLevelSlice?: formattingSettings.SimpleSlice;
+        displayNameKey?: string;
+        description?: string;
+        descriptionKey?: string;
+    } | {
+        presetItems: {
+            value: string;
+            displayName: string;
+        }[];
+        preset: formattingSettings.ItemDropdown;
         name: string;
         displayName: string;
         slices: Array<FormattingSettingsSlice>;

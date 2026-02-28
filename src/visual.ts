@@ -348,22 +348,68 @@ export class Visual implements IVisual {
         this.dataFontSize = this.getObjectValue<number>(dataView?.metadata?.objects, "labels", "dataFontSize", 11) || 11;
         this.dataFontFamily = this.getObjectValue<any>(dataView?.metadata?.objects, "labels", "dataFontFamily", { value: "" } as any as string) as any as string || this.getObjectValue<string>(dataView?.metadata?.objects, "labels", "dataFontFamily", "");
         this.dataBold = this.getObjectValue<boolean>(dataView?.metadata?.objects, "labels", "dataBold", false);
-        this.rowHeaderColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "rowHeaderColor", { value: "" } as any));
-        this.rowHeaderBg = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "rowHeaderBg", { value: "" } as any));
-        this.colHeaderColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "colHeaderColor", { value: "" } as any));
-        this.colHeaderBg = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "colHeaderBg", { value: "" } as any));
-        this.cellColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "cellColor", { value: "" } as any));
-        this.cellBg = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "cellBg", { value: "" } as any));
+
+        const themePresetObj = this.getObjectValue<any>(dataView?.metadata?.objects, "theme", "preset", { value: "Default" } as any);
+        const themePreset = typeof themePresetObj === "string" ? themePresetObj : (themePresetObj && themePresetObj.value) || "Default";
+
+        let fallbackRowHeaderColor = "";
+        let fallbackRowHeaderBg = "";
+        let fallbackColHeaderColor = "";
+        let fallbackColHeaderBg = "";
+        let fallbackCellColor = "";
+        let fallbackCellBg = "";
+        let fallbackZebraOdd = "#f7f7f7";
+        let fallbackZebraEven = "#ffffff";
+        let fallbackZebraColOdd = "#f7f7f7";
+        let fallbackZebraColEven = "#ffffff";
+        let fallbackGridColor = "#d0d0d0";
+
+        if (themePreset === "Light Blue") {
+            fallbackRowHeaderColor = "#ffffff"; fallbackRowHeaderBg = "#3498db";
+            fallbackColHeaderColor = "#ffffff"; fallbackColHeaderBg = "#3498db";
+            fallbackCellColor = "#333333"; fallbackCellBg = "#ffffff";
+            fallbackZebraOdd = "#eaf2f8"; fallbackZebraEven = "#ffffff";
+            fallbackZebraColOdd = "#eaf2f8"; fallbackZebraColEven = "#ffffff";
+            fallbackGridColor = "#bdc3c7";
+        } else if (themePreset === "Dark") {
+            fallbackRowHeaderColor = "#ffffff"; fallbackRowHeaderBg = "#2c3e50";
+            fallbackColHeaderColor = "#ffffff"; fallbackColHeaderBg = "#2c3e50";
+            fallbackCellColor = "#ecf0f1"; fallbackCellBg = "#34495e";
+            fallbackZebraOdd = "#3d566e"; fallbackZebraEven = "#34495e";
+            fallbackZebraColOdd = "#3d566e"; fallbackZebraColEven = "#34495e";
+            fallbackGridColor = "#7f8c8d";
+        } else if (themePreset === "Excel-like") {
+            fallbackRowHeaderColor = "#000000"; fallbackRowHeaderBg = "#f3f2f1";
+            fallbackColHeaderColor = "#000000"; fallbackColHeaderBg = "#f3f2f1";
+            fallbackCellColor = "#000000"; fallbackCellBg = "#ffffff";
+            fallbackZebraOdd = "#ffffff"; fallbackZebraEven = "#ffffff";
+            fallbackZebraColOdd = "#ffffff"; fallbackZebraColEven = "#ffffff";
+            fallbackGridColor = "#d4d4d4";
+        } else if (themePreset === "Modern") {
+            fallbackRowHeaderColor = "#2c3e50"; fallbackRowHeaderBg = "#ecf0f1";
+            fallbackColHeaderColor = "#2c3e50"; fallbackColHeaderBg = "#ecf0f1";
+            fallbackCellColor = "#2c3e50"; fallbackCellBg = "#ffffff";
+            fallbackZebraOdd = "#fafafa"; fallbackZebraEven = "#ffffff";
+            fallbackZebraColOdd = "#fafafa"; fallbackZebraColEven = "#ffffff";
+            fallbackGridColor = "#e0e0e0";
+        }
+
+        this.rowHeaderColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "rowHeaderColor", { value: "" } as any)) || fallbackRowHeaderColor;
+        this.rowHeaderBg = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "rowHeaderBg", { value: "" } as any)) || fallbackRowHeaderBg;
+        this.colHeaderColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "colHeaderColor", { value: "" } as any)) || fallbackColHeaderColor;
+        this.colHeaderBg = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "colHeaderBg", { value: "" } as any)) || fallbackColHeaderBg;
+        this.cellColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "cellColor", { value: "" } as any)) || fallbackCellColor;
+        this.cellBg = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "colors", "cellBg", { value: "" } as any)) || fallbackCellBg;
         this.gridShowHorizontal = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grid", "showHorizontal", true);
         this.gridShowVertical = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grid", "showVertical", true);
         this.gridThickness = this.getObjectValue<number>(dataView?.metadata?.objects, "grid", "thickness", 1) || 0;
-        this.gridColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "grid", "color", { value: "#d0d0d0" } as any)) || "#d0d0d0";
+        this.gridColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "grid", "color", { value: fallbackGridColor } as any)) || fallbackGridColor;
         this.zebraEnabled = this.getObjectValue<boolean>(dataView?.metadata?.objects, "zebra", "enabled", false);
-        this.zebraOddColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "zebra", "oddColor", { value: "#f7f7f7" } as any)) || "#f7f7f7";
-        this.zebraEvenColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "zebra", "evenColor", { value: "#ffffff" } as any)) || "#ffffff";
+        this.zebraOddColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "zebra", "oddColor", { value: fallbackZebraOdd } as any)) || fallbackZebraOdd;
+        this.zebraEvenColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "zebra", "evenColor", { value: fallbackZebraEven } as any)) || fallbackZebraEven;
         this.zebraColEnabled = this.getObjectValue<boolean>(dataView?.metadata?.objects, "zebraColumns", "enabled", false);
-        this.zebraColOddColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "zebraColumns", "oddColor", { value: "#f7f7f7" } as any)) || "#f7f7f7";
-        this.zebraColEvenColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "zebraColumns", "evenColor", { value: "#ffffff" } as any)) || "#ffffff";
+        this.zebraColOddColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "zebraColumns", "oddColor", { value: fallbackZebraColOdd } as any)) || fallbackZebraColOdd;
+        this.zebraColEvenColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "zebraColumns", "evenColor", { value: fallbackZebraColEven } as any)) || fallbackZebraColEven;
         // Reflect toolbar checkbox states
         const chkRepeatEl = this.toolbar.querySelector('#ghm-repeat') as HTMLInputElement | null;
         if (chkRepeatEl) {
