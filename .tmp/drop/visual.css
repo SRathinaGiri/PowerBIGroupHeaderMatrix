@@ -1,7 +1,16 @@
-.ghm-container {
+.ghm-root {
   width: 100%;
   height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ghm-container {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
   overflow: auto;
+  position: relative;
 }
 .ghm-toolbar {
   display: flex;
@@ -9,9 +18,8 @@
   align-items: center;
   padding: 4px 6px;
   border-bottom: 1px solid #eee;
-  position: sticky;
-  top: 0;
   background: #fff;
+  flex: 0 0 auto;
   z-index: 6;
 }
 .ghm-btn {
@@ -26,10 +34,9 @@
   background: #f0f0f0;
 }
 .ghm-debug {
-  position: sticky;
-  top: 0;
-  margin-left: auto;
-  margin-right: 8px;
+  position: absolute;
+  top: 40px;
+  right: 8px;
   font-family: monospace;
   font-size: 11px;
   background: rgba(0, 0, 0, 0.05);
@@ -38,6 +45,7 @@
   border-radius: 4px;
   max-width: 50%;
   white-space: pre-wrap;
+  pointer-events: none;
 }
 .ghm-placeholder {
   color: #888;
@@ -72,8 +80,6 @@
   z-index: 3;
 }
 .ghm-sticky .ghm-table thead th.ghm-corner {
-  min-width: 120px;
-  /* space for row header column */
   background: #fff;
   left: 0;
   position: sticky;
@@ -88,6 +94,7 @@
   white-space: nowrap;
   position: sticky;
   left: 0;
+  /* overridden inline for tabular stacking */
   z-index: 2;
 }
 .ghm-table td {
@@ -130,5 +137,11 @@
 .ghm-totalrow th,
 .ghm-totalrow td {
   font-weight: 700;
+}
+.ghm-sort-icon {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10px;
+  cursor: pointer;
 }
 

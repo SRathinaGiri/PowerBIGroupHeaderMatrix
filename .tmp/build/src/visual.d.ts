@@ -4,6 +4,7 @@ import VisualConstructorOptions = powerbi.extensibility.visual.VisualConstructor
 import VisualUpdateOptions = powerbi.extensibility.visual.VisualUpdateOptions;
 import IVisual = powerbi.extensibility.visual.IVisual;
 export declare class Visual implements IVisual {
+    private root;
     private container;
     private toolbar;
     private contentHost;
@@ -54,7 +55,16 @@ export declare class Visual implements IVisual {
     private cellBg?;
     private rowLevelStyles;
     private colLevelStyles;
+    private rowLevelNames;
+    private sortState;
+    private viewMode;
+    private currentPage;
+    private pageSize;
+    private scrollListener;
     private host;
+    private selectionManager;
+    private tooltipServiceWrapper;
+    private resizeObserver;
     private showGrandTotal;
     private grandTotalFallback;
     private rowSubtotalsEnabled;
@@ -70,10 +80,10 @@ export declare class Visual implements IVisual {
     private isAnyAncestorCollapsed;
     private getRowDepth;
     private getColumnDepth;
-    private renderRowGroup;
     private refresh;
     private applyStickyOffsets;
     private persistState;
+    private createSelectionId;
     private getObjectValue;
     private parseColor;
     private getValueFromMapForDisplayCol;
@@ -81,10 +91,8 @@ export declare class Visual implements IVisual {
     private getRowMeasureBg;
     private updateDebugOverlay;
     private loadLevelStyles;
-    private computeRowInfo;
     private getCollapsedRowGroupValue;
     private findSubtotalChild;
-    private aggregateAcrossRowLeaves;
     private getVisibleRowDepth;
     private applyRowHeaderStyle;
     private applyGridBorder;
@@ -102,10 +110,9 @@ export declare class Visual implements IVisual {
     private buildHeaderRowsFromDisplay;
     private beginResize;
     private getCellValueForDisplayCol;
-    private collectLeaves;
-    private collectRowLeaves;
-    private countLeaves;
     private nodeLabel;
-    private formatValue;
     private formatValueByMeasure;
+    private sortRowsRecursive;
+    private attachSortHandler;
+    private getTooltipData;
 }
