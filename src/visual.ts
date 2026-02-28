@@ -115,6 +115,11 @@ export class Visual implements IVisual {
     private rowLevelNames: string[] = [];
     private sortState: SortState | null = null;
 
+    private viewMode: string = "normal";
+    private currentPage: number = 1;
+    private pageSize: number = 100;
+    private scrollListener: ((e: Event) => void) | null = null;
+
     private host: IVisualHost;
     private selectionManager: ISelectionManager;
     private tooltipServiceWrapper: ITooltipServiceWrapper;
@@ -208,6 +213,58 @@ export class Visual implements IVisual {
         });
         lblCompact.appendChild(chkCompact);
         lblCompact.appendChild(document.createTextNode(" Compact"));
+
+        // View Mode select
+        const viewModeSelect = document.createElement("select");
+        viewModeSelect.id = "ghm-viewmode";
+        viewModeSelect.className = "ghm-btn";
+        const optNormal = document.createElement("option"); optNormal.value = "normal"; optNormal.text = "Normal";
+        const optPag = document.createElement("option"); optPag.value = "pagination"; optPag.text = "Pagination";
+        const optVirt = document.createElement("option"); optVirt.value = "virtualization"; optVirt.text = "Virtualization";
+        viewModeSelect.appendChild(optNormal);
+        viewModeSelect.appendChild(optPag);
+        viewModeSelect.appendChild(optVirt);
+        viewModeSelect.addEventListener("change", () => {
+            this.viewMode = viewModeSelect.value;
+            this.currentPage = 1;
+            this.persistState();
+            this.refresh();
+        });
+
+        const btnPrevPage = document.createElement("button");
+        btnPrevPage.id = "ghm-btn-prevpage";
+        btnPrevPage.className = "ghm-btn";
+        btnPrevPage.textContent = "<";
+        btnPrevPage.title = "Previous Page";
+        btnPrevPage.addEventListener("click", () => {
+            if (this.currentPage > 1) {
+                this.currentPage--;
+                this.persistState();
+                this.refresh();
+            }
+        });
+
+        const btnNextPage = document.createElement("button");
+        btnNextPage.id = "ghm-btn-nextpage";
+        btnNextPage.className = "ghm-btn";
+        btnNextPage.textContent = ">";
+        btnNextPage.title = "Next Page";
+        btnNextPage.addEventListener("click", () => {
+            const rowCount = this.lastMatrix && this.lastMatrix.rows && this.lastMatrix.rows.root && this.lastMatrix.rows.root.children ? this.collectOutlineRowsWithTotals(this.lastMatrix.rows.root, this.getRowDepth(this.lastMatrix.rows)).filter((r: any) => !r.isTotal).length : 0;
+            // A more robust max page relies on preprocessed rows length, but calculating it correctly via preprocessedRows is done in renderMatrix. We approximate or trust the user. For safety, we increment and allow the empty view to trigger bounds check on next render, or compute here.
+            // But we can approximate total pages easily. We will do a generic bounds check in update() instead or accept unbounded.
+            // Let's implement unbounded with visual feedback.
+            this.currentPage++;
+            this.persistState();
+            this.refresh();
+        });
+
+        const lblPage = document.createElement("span");
+        lblPage.id = "ghm-lbl-page";
+        lblPage.style.fontSize = "12px";
+        lblPage.style.margin = "0 4px";
+        lblPage.textContent = "Page 1";
+
         // Add buttons
         this.toolbar.appendChild(btnExpand);
         const btnCollapseAll = document.createElement("button");
@@ -226,6 +283,12 @@ export class Visual implements IVisual {
         this.toolbar.appendChild(btnCollapseAll);
         this.toolbar.appendChild(lblRepeat);
         this.toolbar.appendChild(lblCompact);
+
+        this.toolbar.appendChild(viewModeSelect);
+        this.toolbar.appendChild(btnPrevPage);
+        this.toolbar.appendChild(lblPage);
+        this.toolbar.appendChild(btnNextPage);
+
         const btnDebug = document.createElement("button");
         btnDebug.className = "ghm-btn";
         btnDebug.textContent = "🧪 Debug";
@@ -260,6 +323,11 @@ export class Visual implements IVisual {
         this.repeatLabels = this.getObjectValue<boolean>(dataView?.metadata?.objects, "state", "repeatLabels", false);
         this.compactLayout = this.getObjectValue<boolean>(dataView?.metadata?.objects, "state", "compactLayout", true);
         if (this.compactLayout) this.repeatLabels = false;
+
+        this.viewMode = this.getObjectValue<string>(dataView?.metadata?.objects, "state", "viewMode", "normal") || "normal";
+        this.currentPage = this.getObjectValue<number>(dataView?.metadata?.objects, "state", "currentPage", 1) || 1;
+        this.pageSize = this.getObjectValue<number>(dataView?.metadata?.objects, "state", "pageSize", 100) || 100;
+
         // Grand total formatting options
         this.showGrandTotal = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "show", true);
         this.grandTotalFallback = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "fallbackToRootValues", false);
@@ -304,6 +372,21 @@ export class Visual implements IVisual {
         }
         const chkCompactEl = this.toolbar.querySelector('#ghm-compact') as HTMLInputElement | null;
         if (chkCompactEl) chkCompactEl.checked = !!this.compactLayout;
+
+        const viewModeSelectEl = this.toolbar.querySelector('#ghm-viewmode') as HTMLSelectElement | null;
+        if (viewModeSelectEl) viewModeSelectEl.value = this.viewMode;
+
+        const btnPrevPage = this.toolbar.querySelector('#ghm-btn-prevpage') as HTMLButtonElement | null;
+        const btnNextPage = this.toolbar.querySelector('#ghm-btn-nextpage') as HTMLButtonElement | null;
+        const lblPage = this.toolbar.querySelector('#ghm-lbl-page') as HTMLElement | null;
+
+        if (btnPrevPage) btnPrevPage.style.display = this.viewMode === "pagination" ? "inline-block" : "none";
+        if (btnNextPage) btnNextPage.style.display = this.viewMode === "pagination" ? "inline-block" : "none";
+        if (lblPage) {
+             lblPage.style.display = this.viewMode === "pagination" ? "inline-block" : "none";
+             lblPage.textContent = `Page ${this.currentPage}`;
+        }
+
         // Load persisted widths and collapsed sets
         const widthsJson = this.getObjectValue<string>(dataView?.metadata?.objects, "state", "columnWidths", "");
         if (widthsJson) {
@@ -755,46 +838,64 @@ export class Visual implements IVisual {
         }
 
         const lastShownRowLabels: Array<string | null> = new Array(rowDepth).fill(null);
+
+        // Pre-process rows for sliceability (pagination and virtualization)
         let bodyRowIndex = 0;
-        for (const rowInfoRaw of rowsToRender) {
-            const rowInfo = { ...rowInfoRaw } as any;
-            const valuesMapForRow = (rowInfo as any).valuesMap || {} as any;
-            const rowMeasureBg = this.getRowMeasureBg(valuesMapForRow as any, totalCountForKeys);
-            let labelsToUse: string[] = rowInfo.labels as string[];
+        const preprocessedRows = rowsToRender.map((rowInfoRaw) => {
+             const rowInfo = { ...rowInfoRaw } as any;
+             const valuesMapForRow = rowInfo.valuesMap || {} as any;
+             const rowMeasureBg = this.getRowMeasureBg(valuesMapForRow as any, totalCountForKeys);
+             let labelsToUse: string[] = rowInfo.labels as string[];
 
-            if (!this.compactLayout && !this.repeatLabels && !rowInfo.isTotal && this.rowSubtotalsEnabled) {
-                if (this.rowSubtotalPosition === "Bottom") {
-                    const newLabels = new Array(rowDepth).fill("");
-                    for (let lvl = 0; lvl < rowDepth; lvl++) {
-                        const lbl = (rowInfo.labels && rowInfo.labels[lvl]) ? rowInfo.labels[lvl] : "";
-                        if (!lbl) { newLabels[lvl] = ""; continue; }
-                        if (lastShownRowLabels[lvl] === lbl) {
-                            newLabels[lvl] = "";
-                        } else {
-                            newLabels[lvl] = lbl;
-                            lastShownRowLabels[lvl] = lbl;
-                            for (let deeper = lvl + 1; deeper < rowDepth; deeper++) lastShownRowLabels[deeper] = null;
-                        }
-                    }
-                    labelsToUse = newLabels;
-                } else {
-                    const newLabels = new Array(rowDepth).fill("");
-                    let lastIdx = -1;
-                    for (let k = rowDepth - 1; k >= 0; k--) { if (rowInfo.labels && rowInfo.labels[k]) { lastIdx = k; break; } }
-                    if (lastIdx >= 0) newLabels[lastIdx] = rowInfo.labels[lastIdx];
-                    labelsToUse = newLabels;
+             if (!this.compactLayout && !this.repeatLabels && !rowInfo.isTotal && this.rowSubtotalsEnabled) {
+                 if (this.rowSubtotalPosition === "Bottom") {
+                     const newLabels = new Array(rowDepth).fill("");
+                     for (let lvl = 0; lvl < rowDepth; lvl++) {
+                         const lbl = (rowInfo.labels && rowInfo.labels[lvl]) ? rowInfo.labels[lvl] : "";
+                         if (!lbl) { newLabels[lvl] = ""; continue; }
+                         if (lastShownRowLabels[lvl] === lbl) {
+                             newLabels[lvl] = "";
+                         } else {
+                             newLabels[lvl] = lbl;
+                             lastShownRowLabels[lvl] = lbl;
+                             for (let deeper = lvl + 1; deeper < rowDepth; deeper++) lastShownRowLabels[deeper] = null;
+                         }
+                     }
+                     labelsToUse = newLabels;
+                 } else {
+                     const newLabels = new Array(rowDepth).fill("");
+                     let lastIdx = -1;
+                     for (let k = rowDepth - 1; k >= 0; k--) { if (rowInfo.labels && rowInfo.labels[k]) { lastIdx = k; break; } }
+                     if (lastIdx >= 0) newLabels[lastIdx] = rowInfo.labels[lastIdx];
+                     labelsToUse = newLabels;
+                 }
+             }
+             if (rowInfo.isTotal) {
+                 for (let k = 0; k < lastShownRowLabels.length; k++) lastShownRowLabels[k] = null;
+             }
+
+             rowInfo.labelsToUse = labelsToUse;
+             rowInfo.rowMeasureBg = rowMeasureBg;
+             if (!rowInfo.isTotal) {
+                 rowInfo.bodyRowIndex = bodyRowIndex;
+                 bodyRowIndex++;
+             }
+             return rowInfo;
+        });
+
+        const renderBody = (rowsToRenderSlice: any[]) => {
+            while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+
+            for (const rowInfo of rowsToRenderSlice) {
+                const labelsToUse = rowInfo.labelsToUse;
+                const rowMeasureBg = rowInfo.rowMeasureBg;
+
+                const tr = document.createElement("tr");
+                if (rowInfo.isTotal) tr.className = "ghm-totalrow";
+                if (this.zebraEnabled && !rowInfo.isTotal) {
+                    const zebraColor = (rowInfo.bodyRowIndex % 2 === 0) ? this.zebraEvenColor : this.zebraOddColor;
+                    if (!rowMeasureBg && zebraColor) tr.style.backgroundColor = zebraColor;
                 }
-            }
-            if (rowInfo.isTotal) {
-                for (let k = 0; k < lastShownRowLabels.length; k++) lastShownRowLabels[k] = null;
-            }
-
-            const tr = document.createElement("tr");
-            if ((rowInfo as any).isTotal) tr.className = "ghm-totalrow";
-            if (this.zebraEnabled && !rowInfo.isTotal) {
-                const zebraColor = (bodyRowIndex % 2 === 0) ? this.zebraEvenColor : this.zebraOddColor;
-                if (!rowMeasureBg && zebraColor) tr.style.backgroundColor = zebraColor;
-            }
             const rowStyleBg = rowMeasureBg || this.rowHeaderBg || "";
             const rowStyleColor = this.rowHeaderColor || "";
 
@@ -960,8 +1061,82 @@ export class Visual implements IVisual {
                 }
             }
             tbody.appendChild(tr);
-            bodyRowIndex++;
         }
+    }; // end of renderBody
+
+    if (this.scrollListener) {
+        this.container.removeEventListener("scroll", this.scrollListener);
+        this.scrollListener = null;
+    }
+
+    if (this.viewMode === "pagination") {
+        const start = (this.currentPage - 1) * this.pageSize;
+        const end = start + this.pageSize;
+        renderBody(preprocessedRows.slice(start, end));
+        const lblPage = this.toolbar.querySelector('#ghm-lbl-page') as HTMLElement | null;
+        if (lblPage) {
+            const totalPages = Math.ceil(preprocessedRows.length / this.pageSize) || 1;
+            if (this.currentPage > totalPages && totalPages > 0) {
+                this.currentPage = totalPages;
+                const newStart = (this.currentPage - 1) * this.pageSize;
+                const newEnd = newStart + this.pageSize;
+                renderBody(preprocessedRows.slice(newStart, newEnd));
+            }
+            lblPage.textContent = `Page ${this.currentPage} of ${totalPages}`;
+
+            const btnNextPage = this.toolbar.querySelector('#ghm-btn-nextpage') as HTMLButtonElement | null;
+            if (btnNextPage) btnNextPage.disabled = this.currentPage >= totalPages;
+            const btnPrevPage = this.toolbar.querySelector('#ghm-btn-prevpage') as HTMLButtonElement | null;
+            if (btnPrevPage) btnPrevPage.disabled = this.currentPage <= 1;
+        }
+    } else if (this.viewMode === "virtualization") {
+        const ROW_HEIGHT = 25; // Estimated
+        const renderVirtual = () => {
+            const scrollTop = this.container.scrollTop;
+            const clientHeight = this.container.clientHeight;
+
+            // Add buffer rows to avoid rapid re-rendering
+            const buffer = 10;
+            const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - buffer);
+            const visibleCount = Math.ceil(clientHeight / ROW_HEIGHT) + (buffer * 2);
+            const endIdx = Math.min(preprocessedRows.length, startIdx + visibleCount);
+
+            const sliced = preprocessedRows.slice(startIdx, endIdx);
+            renderBody(sliced);
+
+            const topSpacerHeight = startIdx * ROW_HEIGHT;
+            const bottomSpacerHeight = (preprocessedRows.length - endIdx) * ROW_HEIGHT;
+
+            if (topSpacerHeight > 0) {
+                const trTop = document.createElement("tr");
+                trTop.style.height = `${topSpacerHeight}px`;
+                trTop.className = "ghm-virtual-spacer-top";
+                tbody.insertBefore(trTop, tbody.firstChild);
+            }
+            if (bottomSpacerHeight > 0) {
+                const trBottom = document.createElement("tr");
+                trBottom.style.height = `${bottomSpacerHeight}px`;
+                trBottom.className = "ghm-virtual-spacer-bottom";
+                tbody.appendChild(trBottom);
+            }
+        };
+
+        let isTicking = false;
+        this.scrollListener = () => {
+            if (!isTicking) {
+                requestAnimationFrame(() => {
+                    renderVirtual();
+                    isTicking = false;
+                });
+                isTicking = true;
+            }
+        };
+        this.container.addEventListener("scroll", this.scrollListener, { passive: true });
+        // Initial render
+        renderVirtual();
+    } else {
+        renderBody(preprocessedRows);
+    }
 
         table.appendChild(colgroup);
         table.appendChild(thead);
@@ -1190,7 +1365,9 @@ export class Visual implements IVisual {
                         collapsedCols: JSON.stringify(Array.from(this.collapsedColKeys)),
                         collapsedRows: JSON.stringify(Array.from(this.collapsedRowKeys)),
                         repeatLabels: this.repeatLabels,
-                        compactLayout: this.compactLayout
+                        compactLayout: this.compactLayout,
+                        viewMode: this.viewMode,
+                        currentPage: this.currentPage
                     },
                     selector: null
                 }

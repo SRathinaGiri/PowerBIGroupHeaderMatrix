@@ -8,6 +8,7 @@ import FormattingSettingsModel = formattingSettings.Model;
 export declare class VisualFormattingSettingsModel extends FormattingSettingsModel {
     behaviorCard: {
         stickyHeaders: formattingSettings.ToggleSwitch;
+        pageSize: formattingSettings.NumUpDown;
         name: string;
         displayName: string;
         slices: Array<FormattingSettingsSlice>;
@@ -198,6 +199,7 @@ export declare class VisualFormattingSettingsModel extends FormattingSettingsMod
     };
     cards: ({
         stickyHeaders: formattingSettings.ToggleSwitch;
+        pageSize: formattingSettings.NumUpDown;
         name: string;
         displayName: string;
         slices: Array<FormattingSettingsSlice>;

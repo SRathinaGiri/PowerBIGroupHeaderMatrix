@@ -44,11 +44,12 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
     // Create formatting settings model formatting cards
     behaviorCard = new class extends FormattingSettingsCard {
         stickyHeaders = new ToggleSwitch({ name: "stickyHeaders", displayName: "Sticky headers", value: true });
+        pageSize = new formattingSettings.NumUpDown({ name: "pageSize", displayName: "Page size", value: 100 });
         name: string = "state";
         displayName: string = "Behavior";
         // Note: Compact layout and Row header min width are managed in the toolbar
         // and persisted via capabilities, so they are intentionally omitted here.
-        slices: Array<FormattingSettingsSlice> = [this.stickyHeaders];
+        slices: Array<FormattingSettingsSlice> = [this.stickyHeaders, this.pageSize];
     }();
 
     labelsCard = new class extends FormattingSettingsCard {

@@ -74,7 +74,10 @@
                 "collapsedRows": { "type": { "text": true } },
                 "stickyHeaders": { "type": { "bool": true } },
                 "repeatLabels": { "type": { "bool": true } },
-                "compactLayout": { "type": { "bool": true } }
+                "compactLayout": { "type": { "bool": true } },
+                "viewMode": { "type": { "text": true } },
+                "currentPage": { "type": { "numeric": true } },
+                "pageSize": { "type": { "numeric": true } }
             }
         },
         "grandTotal": {
