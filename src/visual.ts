@@ -679,6 +679,9 @@ export class Visual implements IVisual {
                     const levelName = this.compactLayout ? (this.rowLevelNames[0] || "Rows") : (this.rowLevelNames[r] || "");
                     corner.textContent = levelName;
 
+                    if (this.rowHeaderBg) corner.style.backgroundColor = this.rowHeaderBg;
+                    if (this.rowHeaderColor) corner.style.color = this.rowHeaderColor;
+
                     this.attachSortHandler(corner, "", -1, r, "label");
 
                     this.applyGridBorder(corner, true);
