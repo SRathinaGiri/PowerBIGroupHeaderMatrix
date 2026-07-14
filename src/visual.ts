@@ -136,7 +136,6 @@ export class Visual implements IVisual {
     // Totals behavior
     private showGrandTotalRows: boolean = true;
     private showGrandTotalColumns: boolean = true;
-    private grandTotalFallback: boolean = false;
     private rowSubtotalsEnabled: boolean = true;
     private rowSubtotalPosition: "Top" | "Bottom" = "Bottom";
     private grandTotalPosition: "Top" | "Bottom" = "Bottom";
@@ -365,10 +364,8 @@ export class Visual implements IVisual {
         this.pageSize = this.getObjectValue<number>(dataView?.metadata?.objects, "state", "pageSize", 100) || 100;
 
         // Grand total formatting options
-        const legacyGrandTotal = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "show", true);
-        this.showGrandTotalRows = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "showRows", legacyGrandTotal);
-        this.showGrandTotalColumns = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "showColumns", legacyGrandTotal);
-        this.grandTotalFallback = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "fallbackToRootValues", false);
+        this.showGrandTotalRows = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "showRows", true);
+        this.showGrandTotalColumns = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "showColumns", true);
         this.rowSubtotalsEnabled = this.getObjectValue<boolean>(dataView?.metadata?.objects, "subtotal", "rowSubtotals", true);
         const rowSubtotalPosRaw = this.getObjectValue<any>(dataView?.metadata?.objects, "subtotal", "rowSubtotalsType", { value: "Bottom" } as any);
         const rowSubtotalPos = typeof rowSubtotalPosRaw === "string" ? rowSubtotalPosRaw : (rowSubtotalPosRaw && (rowSubtotalPosRaw as any).value);
@@ -526,45 +523,10 @@ export class Visual implements IVisual {
         return this.formattingSettingsService.buildFormattingModel(this.formattingSettings);
     }
 
-    // Enumerates per-level subtotal toggles so the host can attach properties to individual row/column levels
     public enumerateObjectInstances(options: powerbi.EnumerateVisualObjectInstancesOptions): powerbi.VisualObjectInstanceEnumeration {
         const enumeration: powerbi.VisualObjectInstance[] = [];
         if (!this.lastMatrix) return enumeration;
 
-        if (options.objectName === "subtotalPerLevel") {
-            const rows = this.lastMatrix.rows;
-            const cols = this.lastMatrix.columns;
-            // Row levels
-            if (rows && rows.levels && rows.levels.length) {
-                rows.levels.forEach((lvl, i) => {
-                    const src = lvl.sources && lvl.sources[0];
-                    if (!src) return;
-                    const displayName = src.displayName || `Row level ${i+1}`;
-                    const selector: any = src.queryName ? { metadata: src.queryName } : null;
-                    enumeration.push({
-                        objectName: options.objectName,
-                        displayName: `Row: ${displayName}`,
-                        properties: { levelSubtotalEnabled: true },
-                        selector
-                    });
-                });
-            }
-            // Column levels
-            if (cols && cols.levels && cols.levels.length) {
-                cols.levels.forEach((lvl, i) => {
-                    const src = lvl.sources && lvl.sources[0];
-                    if (!src) return;
-                    const displayName = src.displayName || `Column level ${i+1}`;
-                    const selector: any = src.queryName ? { metadata: src.queryName } : null;
-                    enumeration.push({
-                        objectName: options.objectName,
-                        displayName: `Column: ${displayName}`,
-                        properties: { levelSubtotalEnabled: true },
-                        selector
-                    });
-                });
-            }
-        }
         if (options.objectName === "measureColors") {
             const vsArr = (this.lastMatrix.valueSources || []) as any[];
             vsArr.forEach((vs, i) => {
@@ -1952,12 +1914,6 @@ export class Visual implements IVisual {
                 labels[0] = "Grand Total";
                 grandTotalRows.push({ labels, valuesMap: map, isTotal: true });
                 return;
-            }
-            if (this.grandTotalFallback && root.values) {
-                const map = root.values as any;
-                const labels = new Array(rowDepth).fill("");
-                labels[0] = "Grand Total";
-                grandTotalRows.push({ labels, valuesMap: map, isTotal: true });
             }
         };
         tryRootTotal();

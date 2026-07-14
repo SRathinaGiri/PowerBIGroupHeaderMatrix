@@ -93,17 +93,14 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
             value: { value: "Bottom", displayName: "Bottom" },
             items: this.rowSubtotalPositionItems
         });
-        rowSubtotalsPerLevel = new ToggleSwitch({ name: "rowSubtotalsPerLevel", displayName: "Per row level", value: true });
-        columnSubtotalsPerLevel = new ToggleSwitch({ name: "columnSubtotalsPerLevel", displayName: "Per column level", value: true });
         name: string = "subtotal";
         displayName: string = "Subtotals";
-        slices: Array<FormattingSettingsSlice> = [this.rowSubtotals, this.columnSubtotals, this.rowSubtotalsType, this.rowSubtotalsPerLevel, this.columnSubtotalsPerLevel];
+        slices: Array<FormattingSettingsSlice> = [this.rowSubtotals, this.columnSubtotals, this.rowSubtotalsType];
     }();
 
     grandTotalCard = new class extends FormattingSettingsCard {
         showRows = new ToggleSwitch({ name: "showRows", displayName: "Grand total row", value: true });
         showColumns = new ToggleSwitch({ name: "showColumns", displayName: "Grand total column", value: true });
-        fallbackToRootValues = new ToggleSwitch({ name: "fallbackToRootValues", displayName: "Fallback to root values", value: false });
         positionItems = [
             { value: "Top", displayName: "Top" },
             { value: "Bottom", displayName: "Bottom" }
@@ -116,7 +113,7 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
         });
         name: string = "grandTotal";
         displayName: string = "Grand Total";
-        slices: Array<FormattingSettingsSlice> = [this.showRows, this.showColumns, this.fallbackToRootValues, this.position];
+        slices: Array<FormattingSettingsSlice> = [this.showRows, this.showColumns, this.position];
     }();
 
     // Colors card

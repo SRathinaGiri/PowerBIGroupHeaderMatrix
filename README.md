@@ -34,6 +34,12 @@ An Excel-like matrix visual for Microsoft Power BI with grouped row and column h
 
 When the visual has not been configured yet, it displays an in-visual landing page with the same setup sequence and data role guidance.
 
+## Rendering Modes
+
+- Normal renders all prepared rows in one table.
+- Pagination renders one page of rows at a time using the configured page size.
+- Virtualization prepares the same row model as Normal, but renders only the visible scroll window plus a small buffer. This reduces DOM work for large row counts, but it is not a data-reduction feature.
+
 ## Sample Report
 
 The `sample` folder contains `GroupedHeaderMatrixSample.pbix`, an offline Power BI report that demonstrates grouped row headers, grouped column headers, expand/collapse behavior, subtotals, and cross-filtering.
