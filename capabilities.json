@@ -593,6 +593,18 @@
             }
         }
     ],
+    "tooltips": {
+        "supportedTypes": {
+            "default": true,
+            "canvas": true
+        },
+        "roles": [
+            "measure"
+        ],
+        "supportEnhancedTooltips": true
+    },
+    "supportsKeyboardFocus": true,
+    "supportsMultiVisualSelection": true,
     "subtotals": {
         "matrix": {
             "rowSubtotals": {

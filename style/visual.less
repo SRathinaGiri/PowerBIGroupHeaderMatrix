@@ -4,6 +4,8 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    color: #222;
+    background: #fff;
 }
 
 .ghm-container {
@@ -35,6 +37,13 @@
 }
 
 .ghm-btn:hover { background: #f0f0f0; }
+
+.ghm-btn:focus-visible,
+.ghm-toggle:focus-visible,
+.ghm-table td:focus-visible {
+    outline: 2px solid #005a9e;
+    outline-offset: 2px;
+}
 
 .ghm-debug {
     position: absolute;
@@ -113,6 +122,47 @@
 .ghm-toggle {
     margin-right: 6px;
     cursor: pointer;
+    border: 1px solid transparent;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    line-height: 1;
+    padding: 0 2px;
+}
+
+.ghm-table td[tabindex] {
+    cursor: pointer;
+}
+
+.ghm-table td[aria-selected="true"] {
+    background: #deecf9;
+}
+
+.ghm-high-contrast {
+    color: var(--ghm-hc-foreground);
+    background: var(--ghm-hc-background);
+}
+
+.ghm-high-contrast .ghm-toolbar,
+.ghm-high-contrast .ghm-btn,
+.ghm-high-contrast .ghm-table th,
+.ghm-high-contrast .ghm-table td,
+.ghm-high-contrast .ghm-toggle {
+    color: var(--ghm-hc-foreground);
+    background: var(--ghm-hc-background);
+    border-color: var(--ghm-hc-separator);
+}
+
+.ghm-high-contrast .ghm-btn:focus-visible,
+.ghm-high-contrast .ghm-toggle:focus-visible,
+.ghm-high-contrast .ghm-table td:focus-visible {
+    outline-color: var(--ghm-hc-selected);
+}
+
+.ghm-high-contrast .ghm-table td[aria-selected="true"] {
+    color: var(--ghm-hc-selected);
+    outline: 2px solid var(--ghm-hc-selected);
+    outline-offset: -2px;
 }
 
 /* Column resizers */

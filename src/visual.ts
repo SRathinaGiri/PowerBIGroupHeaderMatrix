@@ -37,7 +37,8 @@ import VisualConstructorOptions = powerbi.extensibility.visual.VisualConstructor
 import VisualUpdateOptions = powerbi.extensibility.visual.VisualUpdateOptions;
 import IVisual = powerbi.extensibility.visual.IVisual;
 import ISelectionManager = powerbi.extensibility.ISelectionManager;
-import ISelectionId = powerbi.visuals.ISelectionId;
+import ISelectionId = powerbi.extensibility.ISelectionId;
+import IVisualEventService = powerbi.extensibility.IVisualEventService;
 
 import { VisualFormattingSettingsModel } from "./settings";
 import IVisualHost = powerbi.extensibility.visual.IVisualHost;
@@ -123,7 +124,15 @@ export class Visual implements IVisual {
     private host: IVisualHost;
     private selectionManager: ISelectionManager;
     private tooltipServiceWrapper: ITooltipServiceWrapper;
+    private events: IVisualEventService;
     private resizeObserver: ResizeObserver | null = null;
+    private selectedIds: ISelectionId[] = [];
+    private isHighContrast: boolean = false;
+    private highContrastForeground: string = "";
+    private highContrastBackground: string = "";
+    private highContrastSelected: string = "";
+    private highContrastSeparator: string = "";
+    private allowInteractions: boolean = true;
     // Totals behavior
     private showGrandTotal: boolean = true;
     private grandTotalFallback: boolean = false;
@@ -136,14 +145,25 @@ export class Visual implements IVisual {
         this.host = options.host;
         this.selectionManager = options.host.createSelectionManager();
         this.tooltipServiceWrapper = createTooltipServiceWrapper(options.host.tooltipService, options.element);
+        this.events = options.host.eventService;
+        this.allowInteractions = options.host.hostCapabilities?.allowInteractions !== false;
+        this.selectionManager.registerOnSelectCallback((ids: ISelectionId[]) => {
+            this.selectedIds = ids || [];
+            this.refresh();
+        });
 
         // Root flex container
         this.root = document.createElement("div");
         this.root.className = "ghm-root";
+        this.root.tabIndex = 0;
+        this.root.setAttribute("role", "region");
+        this.root.setAttribute("aria-label", "Group Header Matrix visual");
 
         // Toolbar (fixed at top)
         this.toolbar = document.createElement("div");
         this.toolbar.className = "ghm-toolbar";
+        this.toolbar.setAttribute("role", "toolbar");
+        this.toolbar.setAttribute("aria-label", "Matrix controls");
 
         // Scroll container (occupies remaining space)
         this.container = document.createElement("div");
@@ -151,17 +171,20 @@ export class Visual implements IVisual {
 
         const btnExpand = document.createElement("button");
         btnExpand.className = "ghm-btn";
+        btnExpand.type = "button";
         btnExpand.textContent = "➕ Expand All";
         btnExpand.setAttribute("aria-label", "Expand all groups");
         btnExpand.addEventListener("click", () => { this.expandAll(); this.persistState(); this.refresh(); });
         const btnCollapse = document.createElement("button");
         btnCollapse.className = "ghm-btn";
+        btnCollapse.type = "button";
         btnCollapse.textContent = "➖ Collapse All";
         btnCollapse.setAttribute("aria-label", "Collapse all groups");
         btnCollapse.addEventListener("click", () => { this.collapseAll(); this.persistState(); this.refresh(); });
 
         const btnRowExpandLevel = document.createElement("button");
         btnRowExpandLevel.className = "ghm-btn";
+        btnRowExpandLevel.type = "button";
         btnRowExpandLevel.title = "Expand Row Level";
         btnRowExpandLevel.setAttribute("aria-label", "Expand row hierarchy one level");
         btnRowExpandLevel.addEventListener("click", () => { this.expandRowLevel(); this.persistState(); this.refresh(); });
@@ -169,18 +192,21 @@ export class Visual implements IVisual {
         btnRowExpandLevel.textContent = "+ 𝄘";
         const btnRowCollapseLevel = document.createElement("button");
         btnRowCollapseLevel.className = "ghm-btn";
+        btnRowCollapseLevel.type = "button";
         btnRowCollapseLevel.title = "Collapse Row Level";
         btnRowCollapseLevel.setAttribute("aria-label", "Collapse row hierarchy one level");
         btnRowCollapseLevel.addEventListener("click", () => { this.collapseRowLevel(); this.persistState(); this.refresh(); });
         btnRowCollapseLevel.textContent = "- 𝄘";
         const btnColExpandLevel = document.createElement("button");
         btnColExpandLevel.className = "ghm-btn";
+        btnColExpandLevel.type = "button";
         btnColExpandLevel.title = "Expand Column Level";
         btnColExpandLevel.setAttribute("aria-label", "Expand column hierarchy one level");
         btnColExpandLevel.addEventListener("click", () => { this.expandColLevel(); this.persistState(); this.refresh(); });
         btnColExpandLevel.textContent = "+ ⦀";
         const btnColCollapseLevel = document.createElement("button");
         btnColCollapseLevel.className = "ghm-btn";
+        btnColCollapseLevel.type = "button";
         btnColCollapseLevel.title = "Collapse Column Level";
         btnColCollapseLevel.setAttribute("aria-label", "Collapse column hierarchy one level");
         btnColCollapseLevel.addEventListener("click", () => { this.collapseColLevel(); this.persistState(); this.refresh(); });
@@ -234,6 +260,7 @@ export class Visual implements IVisual {
         const btnPrevPage = document.createElement("button");
         btnPrevPage.id = "ghm-btn-prevpage";
         btnPrevPage.className = "ghm-btn";
+        btnPrevPage.type = "button";
         btnPrevPage.textContent = "<";
         btnPrevPage.title = "Previous Page";
         btnPrevPage.addEventListener("click", () => {
@@ -247,6 +274,7 @@ export class Visual implements IVisual {
         const btnNextPage = document.createElement("button");
         btnNextPage.id = "ghm-btn-nextpage";
         btnNextPage.className = "ghm-btn";
+        btnNextPage.type = "button";
         btnNextPage.textContent = ">";
         btnNextPage.title = "Next Page";
         btnNextPage.addEventListener("click", () => {
@@ -269,6 +297,7 @@ export class Visual implements IVisual {
         this.toolbar.appendChild(btnExpand);
         const btnCollapseAll = document.createElement("button");
         btnCollapseAll.className = "ghm-btn";
+        btnCollapseAll.type = "button";
         btnCollapseAll.textContent = "- All";
         btnCollapseAll.title = "Collapse All";
         btnCollapseAll.setAttribute("aria-label", "Collapse all groups");
@@ -291,6 +320,7 @@ export class Visual implements IVisual {
 
         const btnDebug = document.createElement("button");
         btnDebug.className = "ghm-btn";
+        btnDebug.type = "button";
         btnDebug.textContent = "🧪 Debug";
         btnDebug.addEventListener("click", () => { this.debugEnabled = !this.debugEnabled; this.updateDebugOverlay(); });
         // Hide debug button in production
@@ -315,11 +345,15 @@ export class Visual implements IVisual {
     }
 
     public update(options: VisualUpdateOptions) {
+        this.events.renderingStarted(options);
+        this.allowInteractions = this.host.hostCapabilities?.allowInteractions !== false;
         const dataView: DataView | undefined = options.dataViews && options.dataViews[0];
         this.formattingSettings = this.formattingSettingsService.populateFormattingSettingsModel(VisualFormattingSettingsModel, dataView);
+        this.updateHighContrastState();
         // Apply sticky preference if present
         const sticky = this.getObjectValue<boolean>(dataView?.metadata?.objects, "state", "stickyHeaders", true);
         this.container.classList.toggle("ghm-sticky", !!sticky);
+        this.root.classList.toggle("ghm-high-contrast", this.isHighContrast);
         this.repeatLabels = this.getObjectValue<boolean>(dataView?.metadata?.objects, "state", "repeatLabels", false);
         this.compactLayout = this.getObjectValue<boolean>(dataView?.metadata?.objects, "state", "compactLayout", true);
         if (this.compactLayout) this.repeatLabels = false;
@@ -462,6 +496,7 @@ export class Visual implements IVisual {
 
         if (!dataView || !dataView.matrix) {
             this.renderPlaceholder("Add Columns hierarchy and a measure");
+            this.events.renderingFinished(options);
             return;
         }
 
@@ -475,8 +510,10 @@ export class Visual implements IVisual {
             }
             this.loadLevelStyles(this.lastMatrix);
             this.renderMatrix(dataView.matrix);
+            this.events.renderingFinished(options);
         } catch (e) {
             this.renderPlaceholder("Unable to render matrix");
+            this.events.renderingFailed(options, e instanceof Error ? e.message : "Unable to render matrix");
             console.error(e);
         }
     }
@@ -566,6 +603,8 @@ export class Visual implements IVisual {
 
         const table = document.createElement("table");
         table.className = "ghm-table";
+        table.setAttribute("role", "grid");
+        table.setAttribute("aria-label", "Group Header Matrix");
         table.style.borderCollapse = "collapse";
         // Apply a global font if only one family provided
         if (this.rowHeaderFontFamily && !this.colHeaderFontFamily) table.style.fontFamily = this.rowHeaderFontFamily;
@@ -865,6 +904,7 @@ export class Visual implements IVisual {
                 for (let m = 0; m < displayMeasureCount; m++) {
                     const globalM = resolveMeasureIndex(columnLeaves[c], m);
                     const td = document.createElement("td");
+                    td.setAttribute("role", "gridcell");
                     const v = this.getCellValueForDisplayCol(valuesMap as any, numericKeys, columnLeaves[c], globalM, totalCountForKeys, measuresOnColumns);
                     td.textContent = this.formatValueByMeasure(v, globalM);
                     this.applyCellConditionalStyle(td, valuesMap as any, columnLeaves[c], globalM, totalCountForKeys, measuresOnColumns);
@@ -1074,25 +1114,38 @@ export class Visual implements IVisual {
                     this.applyGridBorder(td, false);
 
                     // Interaction (Multi-row mode)
-                    if (!rowInfo.isTotal) {
+                    if (!rowInfo.isTotal && this.allowInteractions) {
                         const rowNode = (rowInfo as any).node;
                         if (rowNode) {
                             const selectionId = this.createSelectionId(rowNode, undefined, undefined);
 
                             // Selection state opacity
-                            const hasSelection = this.selectionManager.hasSelection();
-                            const isSelected = this.selectionManager.getSelectionIds().some(id => (id as any).equals(selectionId));
+                            const hasSelection = this.selectedIds.length > 0 || this.selectionManager.hasSelection();
+                            const isSelected = (this.selectedIds.length ? this.selectedIds : this.selectionManager.getSelectionIds()).some(id => this.selectionIdsMatch(id, selectionId));
                             if (hasSelection && !isSelected) {
                                 td.style.opacity = "0.5";
                             } else {
                                 td.style.opacity = "1";
                             }
+                            td.tabIndex = 0;
+                            td.setAttribute("aria-selected", String(isSelected));
+                            td.setAttribute("aria-label", `${this.getAccessibleRowLabel(rowInfo)} ${td.textContent || ""}`.trim());
 
                             td.addEventListener("click", (e) => {
                                 this.selectionManager.select(selectionId, e.ctrlKey || e.metaKey).then(() => {
+                                    this.selectedIds = this.selectionManager.getSelectionIds();
                                     this.refresh();
                                 });
                                 e.stopPropagation();
+                            });
+                            td.addEventListener("keydown", (e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    this.selectionManager.select(selectionId, e.ctrlKey || e.metaKey).then(() => {
+                                        this.selectedIds = this.selectionManager.getSelectionIds();
+                                        this.refresh();
+                                    });
+                                }
                             });
                             td.addEventListener("contextmenu", (e) => {
                                 this.selectionManager.showContextMenu(selectionId, {x: e.clientX, y: e.clientY});
@@ -1191,6 +1244,8 @@ export class Visual implements IVisual {
         table.appendChild(thead);
         table.appendChild(tbody);
         this.contentHost.appendChild(table);
+        this.table = table;
+        this.applyHighContrastStyles(table);
 
         this.applyStickyOffsets(thead);
         this.updateDebugOverlay({ table, headerRows, measureCount: displayMeasureCount, columnLeaves, rowDepth, colDepth });
@@ -1432,6 +1487,20 @@ export class Visual implements IVisual {
         return builder.createSelectionId();
     }
 
+    private selectionIdsMatch(left: ISelectionId, right: ISelectionId): boolean {
+        const leftAny = left as any;
+        const rightAny = right as any;
+        if (typeof leftAny.equals === "function" && leftAny.equals(right)) return true;
+        if (typeof leftAny.includes === "function" && leftAny.includes(right, true)) return true;
+        if (typeof rightAny.includes === "function" && rightAny.includes(left, true)) return true;
+        return left === right;
+    }
+
+    private getAccessibleRowLabel(rowInfo: any): string {
+        const labels = (rowInfo && (rowInfo.labelsToUse || rowInfo.labels)) || [];
+        return labels.filter((label: string) => !!label).join(" / ") || "Matrix value";
+    }
+
     private getObjectValue<T>(objects: powerbi.DataViewObjects | undefined, objectName: string, propertyName: string, defaultValue: T): T {
         const obj = objects && (objects as any)[objectName];
         const v = obj && obj[propertyName];
@@ -1540,6 +1609,31 @@ export class Visual implements IVisual {
     }
 
     private updateDebugOverlay(_ctx?: { table: HTMLTableElement; headerRows: Array<any>; measureCount: number; columnLeaves: DisplayCol[]; rowDepth: number; colDepth: number }) { /* debug disabled */ return; }
+
+    private updateHighContrastState() {
+        const palette = this.host.colorPalette;
+        this.isHighContrast = !!(palette && palette.isHighContrast);
+        this.highContrastForeground = palette?.foreground?.value || "#000000";
+        this.highContrastBackground = palette?.background?.value || "#ffffff";
+        this.highContrastSelected = palette?.foregroundSelected?.value || this.highContrastForeground;
+        this.highContrastSeparator = palette?.separator?.value || this.highContrastForeground;
+        this.root.style.setProperty("--ghm-hc-foreground", this.highContrastForeground);
+        this.root.style.setProperty("--ghm-hc-background", this.highContrastBackground);
+        this.root.style.setProperty("--ghm-hc-selected", this.highContrastSelected);
+        this.root.style.setProperty("--ghm-hc-separator", this.highContrastSeparator);
+    }
+
+    private applyHighContrastStyles(table: HTMLTableElement) {
+        if (!this.isHighContrast) return;
+        table.style.color = this.highContrastForeground;
+        table.style.backgroundColor = this.highContrastBackground;
+        const cells = Array.from(table.querySelectorAll("th, td")) as HTMLElement[];
+        for (const cell of cells) {
+            cell.style.color = this.highContrastForeground;
+            cell.style.backgroundColor = this.highContrastBackground;
+            cell.style.borderColor = this.highContrastSeparator;
+        }
+    }
 
     private loadLevelStyles(matrix: DataViewMatrix) {
         this.rowLevelStyles = [];
