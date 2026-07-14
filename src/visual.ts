@@ -134,7 +134,8 @@ export class Visual implements IVisual {
     private highContrastSeparator: string = "";
     private allowInteractions: boolean = true;
     // Totals behavior
-    private showGrandTotal: boolean = true;
+    private showGrandTotalRows: boolean = true;
+    private showGrandTotalColumns: boolean = true;
     private grandTotalFallback: boolean = false;
     private rowSubtotalsEnabled: boolean = true;
     private rowSubtotalPosition: "Top" | "Bottom" = "Bottom";
@@ -364,7 +365,9 @@ export class Visual implements IVisual {
         this.pageSize = this.getObjectValue<number>(dataView?.metadata?.objects, "state", "pageSize", 100) || 100;
 
         // Grand total formatting options
-        this.showGrandTotal = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "show", true);
+        const legacyGrandTotal = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "show", true);
+        this.showGrandTotalRows = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "showRows", legacyGrandTotal);
+        this.showGrandTotalColumns = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "showColumns", legacyGrandTotal);
         this.grandTotalFallback = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "fallbackToRootValues", false);
         this.rowSubtotalsEnabled = this.getObjectValue<boolean>(dataView?.metadata?.objects, "subtotal", "rowSubtotals", true);
         const rowSubtotalPosRaw = this.getObjectValue<any>(dataView?.metadata?.objects, "subtotal", "rowSubtotalsType", { value: "Bottom" } as any);
@@ -1388,7 +1391,12 @@ export class Visual implements IVisual {
                 walk(ch, newLabels, newKeys, key, underSubtotal || isSubtotal);
             }
         };
-        if (root.children) for (const ch of root.children) walk(ch, [], [], "", false);
+        if (root.children) {
+            for (const ch of root.children) {
+                if (!this.showGrandTotalColumns && (ch as any).isSubtotal) continue;
+                walk(ch, [], [], "", false);
+            }
+        }
 
         const result: DisplayCol[] = [];
         let i = 0;
@@ -1936,7 +1944,7 @@ export class Visual implements IVisual {
         const rows: Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean; toggles?: { [key: number]: string }; node?: DataViewMatrixNode }> = [];
         const grandTotalRows: Array<{ labels: string[]; valuesMap?: { [key:number]: powerbi.DataViewMatrixNodeValue }; isTotal?: boolean; toggleKey?: string; depth?: number; collapsed?: boolean; toggles?: { [key: number]: string }; node?: DataViewMatrixNode }> = [];
         const tryRootTotal = () => {
-            if (!this.showGrandTotal) return;
+            if (!this.showGrandTotalRows) return;
             const subtotalChild = root.children && (root.children as any[]).find(ch => (ch as any).isSubtotal);
             if (subtotalChild && subtotalChild.values) {
                 const map = subtotalChild.values as any;

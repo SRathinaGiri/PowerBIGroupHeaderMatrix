@@ -124,6 +124,16 @@
                         "bool": true
                     }
                 },
+                "showRows": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "showColumns": {
+                    "type": {
+                        "bool": true
+                    }
+                },
                 "fallbackToRootValues": {
                     "type": {
                         "bool": true

@@ -7,7 +7,7 @@ An Excel-like matrix visual for Microsoft Power BI with grouped row and column h
 - Row and column grouped headers for pivot-table-style layouts.
 - Expand all, collapse all, and level-wise row/column expand-collapse controls.
 - Compact and repeated-label row header modes.
-- Row and column subtotals with configurable grand total placement.
+- Row and column subtotals with separate grand total row and grand total column controls.
 - Value sorting and row label sorting.
 - Pagination and virtualization modes for larger matrices.
 - Grid lines, zebra striping, column striping, color presets, and per-measure color settings.

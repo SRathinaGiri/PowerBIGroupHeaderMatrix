@@ -101,7 +101,8 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
     }();
 
     grandTotalCard = new class extends FormattingSettingsCard {
-        show = new ToggleSwitch({ name: "show", displayName: "Show grand total", value: true });
+        showRows = new ToggleSwitch({ name: "showRows", displayName: "Grand total row", value: true });
+        showColumns = new ToggleSwitch({ name: "showColumns", displayName: "Grand total column", value: true });
         fallbackToRootValues = new ToggleSwitch({ name: "fallbackToRootValues", displayName: "Fallback to root values", value: false });
         positionItems = [
             { value: "Top", displayName: "Top" },
@@ -115,7 +116,7 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
         });
         name: string = "grandTotal";
         displayName: string = "Grand Total";
-        slices: Array<FormattingSettingsSlice> = [this.show, this.fallbackToRootValues, this.position];
+        slices: Array<FormattingSettingsSlice> = [this.showRows, this.showColumns, this.fallbackToRootValues, this.position];
     }();
 
     // Colors card
