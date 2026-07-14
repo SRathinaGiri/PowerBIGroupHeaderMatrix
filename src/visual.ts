@@ -28,7 +28,7 @@
 import powerbi from "powerbi-visuals-api";
 import { FormattingSettingsService } from "powerbi-visuals-utils-formattingmodel";
 import { valueFormatter } from "powerbi-visuals-utils-formattingutils";
-import { createTooltipServiceWrapper, ITooltipServiceWrapper, TooltipEventArgs, TooltipEnabledDataPoint } from "powerbi-visuals-utils-tooltiputils";
+import { createTooltipServiceWrapper, ITooltipServiceWrapper } from "powerbi-visuals-utils-tooltiputils";
 import * as d3 from "d3-selection";
 import VisualTooltipDataItem = powerbi.extensibility.VisualTooltipDataItem;
 import "./../style/visual.less";
@@ -975,6 +975,10 @@ export class Visual implements IVisual {
                     if (!baseBg && this.cellBg) baseBg = this.cellBg;
                     if (baseBg) td.style.backgroundColor = baseBg;
                     this.applyGridBorder(td, false);
+
+                    this.tooltipServiceWrapper.addTooltip(d3.select(td) as any, () => {
+                        return this.getTooltipData(v, undefined, columnLeaves[c], globalM);
+                    }, () => this.createEmptySelectionId());
                     tr.appendChild(td);
                 }
             }
@@ -1173,11 +1177,14 @@ export class Visual implements IVisual {
                     if (baseBg) td.style.backgroundColor = baseBg;
                     this.applyGridBorder(td, false);
 
+                    let cellSelectionId: ISelectionId | undefined;
+
                     // Interaction (Multi-row mode)
                     if (!rowInfo.isTotal && this.allowInteractions) {
                         const rowNode = (rowInfo as any).node;
                         if (rowNode) {
                             const selectionId = this.createSelectionId(rowNode, undefined, undefined);
+                            cellSelectionId = selectionId;
 
                             // Selection state opacity
                             const hasSelection = this.selectedIds.length > 0 || this.selectionManager.hasSelection();
@@ -1212,13 +1219,12 @@ export class Visual implements IVisual {
                                 e.preventDefault();
                                 e.stopPropagation();
                             });
-
-                            // Tooltip
-                            this.tooltipServiceWrapper.addTooltip(d3.select(td) as any, (tooltipEvent: TooltipEventArgs<TooltipEnabledDataPoint>) => {
-                                return this.getTooltipData(v, rowNode, undefined, globalM);
-                            }, () => selectionId);
                         }
                     }
+
+                    this.tooltipServiceWrapper.addTooltip(d3.select(td) as any, () => {
+                        return this.getTooltipData(v, rowInfo, columnLeaves[c], globalM);
+                    }, () => cellSelectionId || this.createEmptySelectionId());
 
                     tr.appendChild(td);
                 }
@@ -1550,9 +1556,13 @@ export class Visual implements IVisual {
 
     private showVisualContextMenu(event: MouseEvent): void {
         if (!this.allowInteractions) return;
-        const selectionId = this.host.createSelectionIdBuilder().createSelectionId();
+        const selectionId = this.createEmptySelectionId();
         this.selectionManager.showContextMenu(selectionId, { x: event.clientX, y: event.clientY });
         event.preventDefault();
+    }
+
+    private createEmptySelectionId(): ISelectionId {
+        return this.host.createSelectionIdBuilder().createSelectionId();
     }
 
     private selectionIdsMatch(left: ISelectionId, right: ISelectionId): boolean {
@@ -2418,34 +2428,35 @@ export class Visual implements IVisual {
         });
     }
 
-    private getTooltipData(value: any, rowNode: DataViewMatrixNode, colNode: DataViewMatrixNode | undefined, measureIndex: number): VisualTooltipDataItem[] {
+    private getTooltipData(value: any, rowInfo: any | undefined, displayCol: DisplayCol | undefined, measureIndex: number): VisualTooltipDataItem[] {
         const res: VisualTooltipDataItem[] = [];
 
-        // Rows
-        if (rowNode) {
-            // Ancestors?
-            // The node structure doesn't easily link back to parents.
-            // But we can use levelValues if available or simple node value.
-            // For a flat list of headers, we need to reconstruct the path or iterate ancestors if available.
-            // DataViewMatrixNode doesn't have 'parent'.
-            // However, we can just show the current node's label and its level name.
-            if (this.lastMatrix && this.lastMatrix.rows && this.lastMatrix.rows.levels && rowNode.level !== undefined) {
-                const levelName = this.lastMatrix.rows.levels[rowNode.level].sources[0].displayName;
-                res.push({
-                    displayName: levelName,
-                    value: this.nodeLabel(rowNode)
-                });
-            } else {
-                 res.push({
-                    displayName: "Row",
-                    value: this.nodeLabel(rowNode)
-                });
-            }
-        }
+        const addHierarchyItems = (axis: "rows" | "columns", labels: string[] | undefined) => {
+            if (!labels || !labels.length) return;
+            const levels = axis === "rows"
+                ? this.lastMatrix?.rows?.levels
+                : this.lastMatrix?.columns?.levels;
 
-        // Columns
-        // If we had the column node... (not passed yet, need to enhance later if crucial)
-        // For now, simple measure
+            labels.forEach((label, index) => {
+                const text = String(label || "").trim();
+                if (!text) return;
+                const level = levels && levels[index];
+                const source = level && level.sources && level.sources[0];
+                if (axis === "columns" && source && (source as any).isMeasure) return;
+                const displayName = source && source.displayName
+                    ? source.displayName
+                    : (axis === "rows" ? `Row level ${index + 1}` : `Column level ${index + 1}`);
+
+                res.push({
+                    displayName,
+                    value: text
+                });
+            });
+        };
+
+        addHierarchyItems("rows", rowInfo && (rowInfo.labels || rowInfo.labelsToUse));
+        addHierarchyItems("columns", displayCol && displayCol.labels);
+
         if (this.lastMatrix && this.lastMatrix.valueSources && this.lastMatrix.valueSources[measureIndex]) {
             res.push({
                 displayName: this.lastMatrix.valueSources[measureIndex].displayName,
