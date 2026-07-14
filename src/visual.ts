@@ -495,7 +495,7 @@ export class Visual implements IVisual {
         while (this.contentHost.firstChild) this.contentHost.removeChild(this.contentHost.firstChild);
 
         if (!dataView || !dataView.matrix) {
-            this.renderPlaceholder("Add Columns hierarchy and a measure");
+            this.renderLandingPage();
             this.events.renderingFinished(options);
             return;
         }
@@ -592,12 +592,66 @@ export class Visual implements IVisual {
         this.contentHost.appendChild(el);
     }
 
+    private renderLandingPage() {
+        const page = document.createElement("div");
+        page.className = "ghm-landing";
+        page.setAttribute("role", "group");
+        page.setAttribute("aria-label", "Group Header Matrix setup instructions");
+
+        const title = document.createElement("h2");
+        title.textContent = "Group Header Matrix";
+        page.appendChild(title);
+
+        const intro = document.createElement("p");
+        intro.textContent = "Build an Excel-like pivot matrix with grouped row headers, grouped column headers, expand and collapse controls, subtotals, sorting, and pagination.";
+        page.appendChild(intro);
+
+        const stepsTitle = document.createElement("h3");
+        stepsTitle.textContent = "Setup";
+        page.appendChild(stepsTitle);
+
+        const steps = document.createElement("ol");
+        [
+            "Add one or more fields to Rows.",
+            "Add one or more fields to Columns.",
+            "Add one or more measures to Values.",
+            "Optional: add measures that return color strings to Cell Background Color or Cell Font Color.",
+            "Use the visual toolbar to expand, collapse, switch compact layout, and enable pagination or virtualization."
+        ].forEach(stepText => {
+            const li = document.createElement("li");
+            li.textContent = stepText;
+            steps.appendChild(li);
+        });
+        page.appendChild(steps);
+
+        const roles = document.createElement("div");
+        roles.className = "ghm-landing-roles";
+        [
+            ["Rows", "Row hierarchy displayed down the left side."],
+            ["Columns", "Column hierarchy displayed across the top."],
+            ["Values", "Measures rendered in the matrix cells."],
+            ["Cell colors", "Optional measure-driven color values."]
+        ].forEach(([name, description]) => {
+            const item = document.createElement("div");
+            const heading = document.createElement("strong");
+            heading.textContent = name;
+            const text = document.createElement("span");
+            text.textContent = description;
+            item.appendChild(heading);
+            item.appendChild(text);
+            roles.appendChild(item);
+        });
+        page.appendChild(roles);
+
+        this.contentHost.appendChild(page);
+    }
+
     private renderMatrix(matrix: DataViewMatrix) {
         const columns = matrix.columns;
         const rows = matrix.rows;
 
         if (!columns || !columns.root || !columns.root.children || columns.root.children.length === 0) {
-            this.renderPlaceholder("No column hierarchy provided");
+            this.renderLandingPage();
             return;
         }
 
@@ -942,7 +996,12 @@ export class Visual implements IVisual {
                      for (let lvl = 0; lvl < rowDepth; lvl++) {
                          const lbl = (rowInfo.labels && rowInfo.labels[lvl]) ? rowInfo.labels[lvl] : "";
                          if (!lbl) { newLabels[lvl] = ""; continue; }
-                         if (lastShownRowLabels[lvl] === lbl) {
+                         const hasToggleAtLevel = !!(rowInfo.toggles && rowInfo.toggles[lvl]) || (rowInfo.toggleKey && rowInfo.depth === lvl);
+                         if (hasToggleAtLevel) {
+                             newLabels[lvl] = lbl;
+                             lastShownRowLabels[lvl] = lbl;
+                             for (let deeper = lvl + 1; deeper < rowDepth; deeper++) lastShownRowLabels[deeper] = null;
+                         } else if (lastShownRowLabels[lvl] === lbl) {
                              newLabels[lvl] = "";
                          } else {
                              newLabels[lvl] = lbl;
@@ -2174,6 +2233,8 @@ export class Visual implements IVisual {
 
     private buildHeaderRowsFromDisplay(displayCols: DisplayCol[], depth: number): Array<Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean; isLeafHeader: boolean; queryKeys: string }>> {
         const rows: Array<Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean; isLeafHeader: boolean; queryKeys: string }>> = [];
+        const hasMeasureLeaves = displayCols.some(col => col.measureIndex !== undefined);
+        const lastHeaderLevel = hasMeasureLeaves ? Math.max(0, depth - 2) : depth - 1;
         for (let level = 0; level < depth; level++) {
             const row: Array<{ label: string; span: number; key: string; togglable: boolean; collapsed: boolean; isLeafHeader: boolean; queryKeys: string }> = [];
             let i = 0;
@@ -2186,7 +2247,13 @@ export class Visual implements IVisual {
                 const collapsed = col.kind === "collapsed" && level === col.collapsedLevel ? true : this.collapsedColKeys.has(key) && level < depth - 1;
                 // Avoid showing a bare +/- toggle with no label when an upper level
                 // header is collapsed. Only show toggles when the label is visible.
-                const togglable = !!key && level < depth - 1 && !!label;
+                const hasChildHeader = displayCols.some(candidate => {
+                    if ((candidate.keys[level] || "") !== key) return false;
+                    if ((candidate.labels[level] || "") !== label) return false;
+                    const childLabels = candidate.labels.slice(level + 1, hasMeasureLeaves ? depth - 1 : depth);
+                    return childLabels.some(childLabel => !!(childLabel && childLabel.trim()));
+                });
+                const togglable = !!key && !!label && level < lastHeaderLevel && hasChildHeader;
 
                 // Determine if this is the "effective leaf" for sorting
                 const isLeafHeader = (col.kind === "leaf" && level === depth - 1) || (col.kind === "collapsed" && level === col.collapsedLevel);
@@ -2196,7 +2263,9 @@ export class Visual implements IVisual {
                 let j = i + 1;
                 while (j < displayCols.length) {
                     const nxt = displayCols[j];
-                    const nLabel = nxt.kind === "leaf" ? nxt.labels[level] : (level < (nxt.collapsedLevel ?? 0) ? nxt.labels[level] : (level === (nxt.collapsedLevel ?? -1) ? nxt.labels[level] : ""));
+                    const nLabel = nxt.kind === "leaf" ? nxt.labels[level] : (
+                        (level <= (nxt.collapsedLevel ?? -1) || (nxt.measureIndex !== undefined && level === depth - 1))
+                            ? nxt.labels[level] : "");
                     const nKey = nxt.keys[level] || "";
                     const nCollapsed = nxt.kind === "collapsed" && level === (nxt.collapsedLevel ?? -1) ? true : this.collapsedColKeys.has(nKey) && level < depth - 1;
                     if (nLabel !== label || nKey !== key || nCollapsed !== collapsed) break;

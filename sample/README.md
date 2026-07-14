@@ -1,6 +1,16 @@
-# Group Header Matrix Sample Guidance
+# Group Header Matrix Sample
 
-Use any tabular dataset that has at least two descriptive dimensions and one numeric measure.
+This folder contains `GroupedHeaderMatrixSample.pbix`, an offline Power BI report that showcases the Group Header Matrix visual.
+
+The sample demonstrates:
+
+- grouped row headers
+- grouped column headers
+- expand and collapse controls
+- subtotals and grand total placement
+- keyboard selection and cross-filtering with another native Power BI visual
+
+For your own tests, use any tabular dataset that has at least two descriptive dimensions and one numeric measure.
 
 Example field mapping:
 
@@ -12,11 +22,4 @@ Example field mapping:
 | Cell Background Color | Optional DAX measure returning color strings such as `#f7f7f7` |
 | Cell Font Color | Optional DAX measure returning color strings such as `#333333` |
 
-For AppSource submission, include an offline `.pbix` sample report that demonstrates:
-
-- grouped row headers
-- grouped column headers
-- expand and collapse controls
-- subtotals and grand total placement
-- pagination or virtualization mode
-- keyboard selection and cross-filtering with another native Power BI visual
+For AppSource submission, use this PBIX or a smaller derivative with the same scenarios.

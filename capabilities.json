@@ -603,6 +603,7 @@
         ],
         "supportEnhancedTooltips": true
     },
+    "supportsLandingPage": true,
     "supportsKeyboardFocus": true,
     "supportsMultiVisualSelection": true,
     "subtotals": {

@@ -32,6 +32,14 @@ An Excel-like matrix visual for Microsoft Power BI with grouped row and column h
 4. Use the toolbar to expand/collapse groups, switch between compact and repeated labels, and choose normal, pagination, or virtualization mode.
 5. Use the formatting pane to configure labels, colors, grid lines, zebra striping, subtotals, grand totals, page size, and theme presets.
 
+When the visual has not been configured yet, it displays an in-visual landing page with the same setup sequence and data role guidance.
+
+## Sample Report
+
+The `sample` folder contains `GroupedHeaderMatrixSample.pbix`, an offline Power BI report that demonstrates grouped row headers, grouped column headers, expand/collapse behavior, subtotals, and cross-filtering.
+
+See [sample/README.md](sample/README.md).
+
 ## Accessibility
 
 The visual is designed for accessible report consumption:
