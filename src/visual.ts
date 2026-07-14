@@ -158,6 +158,7 @@ export class Visual implements IVisual {
         this.root.tabIndex = 0;
         this.root.setAttribute("role", "region");
         this.root.setAttribute("aria-label", "Group Header Matrix visual");
+        this.root.addEventListener("contextmenu", (e) => this.showVisualContextMenu(e));
 
         // Toolbar (fixed at top)
         this.toolbar = document.createElement("div");
@@ -1209,6 +1210,7 @@ export class Visual implements IVisual {
                             td.addEventListener("contextmenu", (e) => {
                                 this.selectionManager.showContextMenu(selectionId, {x: e.clientX, y: e.clientY});
                                 e.preventDefault();
+                                e.stopPropagation();
                             });
 
                             // Tooltip
@@ -1544,6 +1546,13 @@ export class Visual implements IVisual {
         if (colNode && this.lastMatrix!.columns.levels) builder.withMatrixNode(colNode, this.lastMatrix!.columns.levels);
         if (measureIndex !== undefined) builder.withMeasure(this.lastMatrix!.valueSources![measureIndex].queryName);
         return builder.createSelectionId();
+    }
+
+    private showVisualContextMenu(event: MouseEvent): void {
+        if (!this.allowInteractions) return;
+        const selectionId = this.host.createSelectionIdBuilder().createSelectionId();
+        this.selectionManager.showContextMenu(selectionId, { x: event.clientX, y: event.clientY });
+        event.preventDefault();
     }
 
     private selectionIdsMatch(left: ISelectionId, right: ISelectionId): boolean {
