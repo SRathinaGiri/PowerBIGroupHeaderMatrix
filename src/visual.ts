@@ -2455,7 +2455,7 @@ export class Visual implements IVisual {
         };
 
         addHierarchyItems("rows", rowInfo && (rowInfo.labels || rowInfo.labelsToUse));
-        addHierarchyItems("columns", displayCol && displayCol.labels);
+        addHierarchyItems("columns", this.getTooltipColumnLabels(displayCol));
 
         if (this.lastMatrix && this.lastMatrix.valueSources && this.lastMatrix.valueSources[measureIndex]) {
             res.push({
@@ -2470,5 +2470,14 @@ export class Visual implements IVisual {
         }
 
         return res;
+    }
+
+    private getTooltipColumnLabels(displayCol: DisplayCol | undefined): string[] | undefined {
+        if (!displayCol) return undefined;
+        if (displayCol.kind === "leaf") return displayCol.labels;
+
+        return displayCol.labels.map((label, index) => {
+            return index <= displayCol.collapsedLevel ? label : "";
+        });
     }
 }
