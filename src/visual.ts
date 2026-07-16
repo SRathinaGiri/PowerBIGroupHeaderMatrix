@@ -1918,6 +1918,12 @@ export class Visual implements IVisual {
                 grandTotalRows.push({ labels, valuesMap: map, isTotal: true });
                 return;
             }
+            if (root.values) {
+                const map = root.values as any;
+                const labels = new Array(rowDepth).fill("");
+                labels[0] = "Grand Total";
+                grandTotalRows.push({ labels, valuesMap: map, isTotal: true });
+            }
         };
         tryRootTotal();
 

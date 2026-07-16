@@ -385,6 +385,26 @@
                             }
                         ]
                     }
+                },
+                "rowSubtotalsPerLevel": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "columnSubtotalsPerLevel": {
+                    "type": {
+                        "bool": true
+                    }
+                }
+            }
+        },
+        "subtotalPerLevel": {
+            "displayName": "Subtotals (Per Level)",
+            "properties": {
+                "levelSubtotalEnabled": {
+                    "type": {
+                        "bool": true
+                    }
                 }
             }
         },
@@ -608,6 +628,27 @@
                     "propertyName": "rowSubtotalsType"
                 },
                 "defaultValue": "Bottom"
+            },
+            "rowSubtotalsPerLevel": {
+                "propertyIdentifier": {
+                    "objectName": "subtotal",
+                    "propertyName": "rowSubtotalsPerLevel"
+                },
+                "defaultValue": true
+            },
+            "columnSubtotalsPerLevel": {
+                "propertyIdentifier": {
+                    "objectName": "subtotal",
+                    "propertyName": "columnSubtotalsPerLevel"
+                },
+                "defaultValue": true
+            },
+            "levelSubtotalEnabled": {
+                "propertyIdentifier": {
+                    "objectName": "subtotalPerLevel",
+                    "propertyName": "levelSubtotalEnabled"
+                },
+                "defaultValue": true
             }
         }
     },
