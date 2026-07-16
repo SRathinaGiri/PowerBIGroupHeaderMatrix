@@ -137,7 +137,8 @@ export class Visual implements IVisual {
     private showGrandTotalRows: boolean = true;
     private showGrandTotalColumns: boolean = true;
     private rowSubtotalsEnabled: boolean = true;
-    private rowSubtotalPosition: "Top" | "Bottom" = "Bottom";
+    private columnSubtotalsEnabled: boolean = true;
+    private rowSubtotalPosition: "Top" | "Bottom" = "Top";
     private grandTotalPosition: "Top" | "Bottom" = "Bottom";
 
     constructor(options: VisualConstructorOptions) {
@@ -366,10 +367,11 @@ export class Visual implements IVisual {
         // Grand total formatting options
         this.showGrandTotalRows = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "showRows", true);
         this.showGrandTotalColumns = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grandTotal", "showColumns", true);
-        this.rowSubtotalsEnabled = this.getObjectValue<boolean>(dataView?.metadata?.objects, "subtotal", "rowSubtotals", true);
-        const rowSubtotalPosRaw = this.getObjectValue<any>(dataView?.metadata?.objects, "subtotal", "rowSubtotalsType", { value: "Bottom" } as any);
+        this.rowSubtotalsEnabled = this.getObjectValue<boolean>(dataView?.metadata?.objects, "subtotal", "showRowSubtotals", true);
+        this.columnSubtotalsEnabled = this.getObjectValue<boolean>(dataView?.metadata?.objects, "subtotal", "showColumnSubtotals", true);
+        const rowSubtotalPosRaw = this.getObjectValue<any>(dataView?.metadata?.objects, "subtotal", "rowSubtotalsType", { value: "Top" } as any);
         const rowSubtotalPos = typeof rowSubtotalPosRaw === "string" ? rowSubtotalPosRaw : (rowSubtotalPosRaw && (rowSubtotalPosRaw as any).value);
-        this.rowSubtotalPosition = rowSubtotalPos === "Top" ? "Top" : "Bottom";
+        this.rowSubtotalPosition = rowSubtotalPos === "Bottom" ? "Bottom" : "Top";
         const grandTotalPosRaw = this.getObjectValue<any>(dataView?.metadata?.objects, "grandTotal", "position", { value: "Bottom" } as any);
         const grandTotalPos = typeof grandTotalPosRaw === "string" ? grandTotalPosRaw : (grandTotalPosRaw && (grandTotalPosRaw as any).value);
         this.grandTotalPosition = grandTotalPos === "Top" ? "Top" : "Bottom";
@@ -1287,7 +1289,7 @@ export class Visual implements IVisual {
     }
 
     private computeDisplayColumns(root: DataViewMatrixNode, depth: number, measuresOnColumns: boolean, totalMeasureCount: number): DisplayCol[] {
-        type Leaf = { offset: number; labels: string[]; keys: string[]; collapsedAt: number | null; measureIndex?: number };
+        type Leaf = { offset: number; labels: string[]; keys: string[]; collapsedAt: number | null; measureIndex?: number; isSubtotal: boolean };
         const leaves: Leaf[] = [];
         const ranges = new Map<string, { start: number; end: number; level: number }>();
         const subtotalOffsetByKey = new Map<string, number>();
@@ -1340,7 +1342,7 @@ export class Visual implements IVisual {
                     }
                 }
 
-                leaves.push({ offset, labels: newLabels, keys: newKeys, collapsedAt, measureIndex });
+                leaves.push({ offset, labels: newLabels, keys: newKeys, collapsedAt, measureIndex, isSubtotal: underSubtotal || isSubtotal });
                 if (collapsedAt !== null) {
                     const gkey = newKeys.slice(0, collapsedAt + 1).filter(Boolean).join("||");
                     const r = ranges.get(gkey);
@@ -1414,7 +1416,10 @@ export class Visual implements IVisual {
 
                 i = r.end + 1;
             } else {
-                result.push({ kind: "leaf", offset: leaf.offset, labels: leaf.labels, keys: leaf.keys, measureIndex: leaf.measureIndex });
+                const isGrandTotalLeaf = leaf.keys.filter(Boolean)[0] === "Grand Total";
+                if (!leaf.isSubtotal || this.columnSubtotalsEnabled || isGrandTotalLeaf) {
+                    result.push({ kind: "leaf", offset: leaf.offset, labels: leaf.labels, keys: leaf.keys, measureIndex: leaf.measureIndex });
+                }
                 i++;
             }
         }

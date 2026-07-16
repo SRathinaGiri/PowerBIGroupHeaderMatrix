@@ -372,6 +372,16 @@
                         "bool": true
                     }
                 },
+                "showRowSubtotals": {
+                    "type": {
+                        "bool": true
+                    }
+                },
+                "showColumnSubtotals": {
+                    "type": {
+                        "bool": true
+                    }
+                },
                 "rowSubtotalsType": {
                     "type": {
                         "enumeration": [
@@ -627,7 +637,7 @@
                     "objectName": "subtotal",
                     "propertyName": "rowSubtotalsType"
                 },
-                "defaultValue": "Bottom"
+                "defaultValue": "Top"
             },
             "rowSubtotalsPerLevel": {
                 "propertyIdentifier": {

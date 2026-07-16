@@ -81,8 +81,8 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
 
     // Subtotals pane
     subtotalsCard = new class extends FormattingSettingsCard {
-        rowSubtotals = new ToggleSwitch({ name: "rowSubtotals", displayName: "Row subtotals", value: true });
-        columnSubtotals = new ToggleSwitch({ name: "columnSubtotals", displayName: "Column subtotals", value: true });
+        showRowSubtotals = new ToggleSwitch({ name: "showRowSubtotals", displayName: "Row subtotals", value: true });
+        showColumnSubtotals = new ToggleSwitch({ name: "showColumnSubtotals", displayName: "Column subtotals", value: true });
         rowSubtotalPositionItems = [
             { value: "Top", displayName: "Top" },
             { value: "Bottom", displayName: "Bottom" }
@@ -90,12 +90,12 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
         rowSubtotalsType = new ItemDropdown({
             name: "rowSubtotalsType",
             displayName: "Row subtotal position",
-            value: { value: "Bottom", displayName: "Bottom" },
+            value: { value: "Top", displayName: "Top" },
             items: this.rowSubtotalPositionItems
         });
         name: string = "subtotal";
         displayName: string = "Subtotals";
-        slices: Array<FormattingSettingsSlice> = [this.rowSubtotals, this.columnSubtotals, this.rowSubtotalsType];
+        slices: Array<FormattingSettingsSlice> = [this.showRowSubtotals, this.showColumnSubtotals, this.rowSubtotalsType];
     }();
 
     grandTotalCard = new class extends FormattingSettingsCard {
