@@ -509,6 +509,9 @@ export class Visual implements IVisual {
                 this.initializeDefaultCollapsed(this.lastMatrix, enableDefault);
                 this.collapseInitialized = true;
             }
+            if (this.pruneInvalidCollapsedState(this.lastMatrix)) {
+                this.persistState();
+            }
             this.loadLevelStyles(this.lastMatrix);
             this.renderMatrix(dataView.matrix);
             this.events.renderingFinished(options);
@@ -1921,19 +1924,18 @@ export class Visual implements IVisual {
         const traverse = (node: DataViewMatrixNode, depth: number, path: string[], keyPath: string[]) => {
             const label = this.nodeLabel(node);
             const hasChildren = !!(node.children && node.children.length);
+            const realChildren = this.getRealChildren(node);
+            const hasCollapsibleChildren = realChildren.length > 1;
             const subtotalChild = hasChildren ? (node.children as any[]).find(ch => (ch as any).isSubtotal) : null;
             const hasGroupValues = hasChildren && node.values && Object.keys(node.values as any).length > 0;
             const map = subtotalChild ? (subtotalChild.values as any) : (hasGroupValues ? (node.values as any) : null);
             const gKey = [...keyPath, label].filter(Boolean).join("||");
-            const isCollapsed = gKey && this.collapsedRowKeys.has(gKey);
+            const isCollapsed = hasCollapsibleChildren && gKey && this.collapsedRowKeys.has(gKey);
             const isRootNode = depth === 0 && (!label || label === "") && keyPath.length === 0;
 
             if (isRootNode) {
                  if (hasChildren) {
-                    for (const ch of node.children) {
-                        if ((ch as any).isSubtotal) continue;
-                        traverse(ch, 0, [], []);
-                    }
+                    for (const ch of realChildren) traverse(ch, 0, [], []);
                 }
                 return;
             }
@@ -1950,7 +1952,7 @@ export class Visual implements IVisual {
                         labels,
                         valuesMap: map || {},
                         isTotal: true, // Treat as total for styling/behavior
-                        toggleKey: gKey,
+                        toggleKey: hasCollapsibleChildren ? gKey : undefined,
                         depth,
                         collapsed: true
                     });
@@ -1969,7 +1971,7 @@ export class Visual implements IVisual {
                             labels,
                             valuesMap: {}, // Empty values
                             isTotal: true, // Mark as total/group header
-                            toggleKey: gKey,
+                            toggleKey: hasCollapsibleChildren ? gKey : undefined,
                             depth,
                             collapsed: false
                         });
@@ -1980,7 +1982,7 @@ export class Visual implements IVisual {
                                 labels,
                                 valuesMap: map,
                                 isTotal: true,
-                                toggleKey: gKey,
+                                toggleKey: hasCollapsibleChildren ? gKey : undefined,
                                 depth,
                                 collapsed: false
                             });
@@ -1990,7 +1992,7 @@ export class Visual implements IVisual {
                                 labels,
                                 valuesMap: {},
                                 isTotal: true,
-                                toggleKey: gKey,
+                                toggleKey: hasCollapsibleChildren ? gKey : undefined,
                                 depth,
                                 collapsed: false
                             });
@@ -1998,8 +2000,7 @@ export class Visual implements IVisual {
                     }
 
                     // 2. Children
-                    for (const ch of node.children) {
-                        if ((ch as any).isSubtotal) continue;
+                    for (const ch of realChildren) {
                         // build next path correctly: fill parent positions
                         const nextPath = new Array(rowDepth).fill("");
                         for (let i = 0; i < path.length; i++) nextPath[i] = path[i];
@@ -2035,8 +2036,8 @@ export class Visual implements IVisual {
                 for (let i = 0; i < path.length; i++) labels[i] = path[i];
                 labels[depth] = collapsedFlag ? label : `${label} Total`;
                 const toggles: { [key: number]: string } = {};
-                if (gKey) toggles[depth] = gKey;
-                rows.push({ labels, valuesMap: map!, isTotal: true, toggleKey: gKey || undefined, depth, collapsed: collapsedFlag, toggles });
+                if (hasCollapsibleChildren && gKey) toggles[depth] = gKey;
+                rows.push({ labels, valuesMap: map!, isTotal: true, toggleKey: hasCollapsibleChildren ? gKey || undefined : undefined, depth, collapsed: collapsedFlag, toggles });
             };
 
             if (includeSubtotal && (!subtotalAtBottom || isCollapsed)) {
@@ -2046,8 +2047,7 @@ export class Visual implements IVisual {
 
             if (hasChildren) {
                 let firstChild = true;
-                for (const ch of node.children) {
-                    if ((ch as any).isSubtotal) continue;
+                for (const ch of realChildren) {
                     const nextPath = new Array(rowDepth).fill("");
                     for (let i = 0; i < path.length; i++) nextPath[i] = path[i];
                     nextPath[depth] = label;
@@ -2083,7 +2083,7 @@ export class Visual implements IVisual {
                     traverse(ch, depth + 1, nextPath.slice(0, depth + 1), [...keyPath, label]);
 
                     // If this was the first child, and we didn't emit a top subtotal, we must attach the toggleKey to the first row generated by this child.
-                    if (isFirstChildOfGroup && !isCollapsed && !(includeSubtotal && !subtotalAtBottom)) {
+                    if (hasCollapsibleChildren && isFirstChildOfGroup && !isCollapsed && !(includeSubtotal && !subtotalAtBottom)) {
                         if (rows.length > childStartIdx) {
                             const firstRow = rows[childStartIdx];
                             // Ensure toggles map exists and add the toggle for this depth
@@ -2125,12 +2125,13 @@ export class Visual implements IVisual {
         const addKeysAtDepth = (node: DataViewMatrixNode, depth: number, path: string[]) => {
             const label = this.nodeLabel(node);
             const key = [...path, label].filter(Boolean).join("||");
-            if (!node.children || node.children.length === 0) return;
+            const children = this.getRealChildren(node);
             if (depth === targetDepth) {
-                if (!this.collapsedRowKeys.has(key)) this.collapsedRowKeys.add(key);
+                if (children.length > 1 && !this.collapsedRowKeys.has(key)) this.collapsedRowKeys.add(key);
                 return;
             }
-            for (const ch of node.children) addKeysAtDepth(ch, depth + 1, [...path, label]);
+            if (children.length === 0) return;
+            for (const ch of children) addKeysAtDepth(ch, depth + 1, [...path, label]);
         };
         for (const ch of this.lastMatrix.rows.root.children) addKeysAtDepth(ch, 1, []);
     }
@@ -2154,14 +2155,15 @@ export class Visual implements IVisual {
         if (current <= 1) return;
         const target = current - 1;
         const addAtDepth = (node: DataViewMatrixNode, depth: number, path: string[]) => {
-            if (!node.children || node.children.length === 0) return;
             const label = this.nodeLabel(node);
             const key = [...path, label].filter(Boolean).join("||");
+            const children = this.getRealChildren(node);
             if (depth === target) {
-                if (!this.collapsedColKeys.has(key)) this.collapsedColKeys.add(key);
+                if (children.length > 1 && !this.collapsedColKeys.has(key)) this.collapsedColKeys.add(key);
                 return;
             }
-            for (const ch of node.children) addAtDepth(ch, depth + 1, [...path, label]);
+            if (children.length === 0) return;
+            for (const ch of children) addAtDepth(ch, depth + 1, [...path, label]);
         };
         for (const ch of this.lastMatrix.columns.root.children) addAtDepth(ch, 1, []);
     }
@@ -2186,10 +2188,9 @@ export class Visual implements IVisual {
             const addColKeys = (node: DataViewMatrixNode, path: string[]) => {
                 const label = this.nodeLabel(node);
                 const key = [...path, label].filter(Boolean).join("||");
-                if (node.children && node.children.length) {
-                    if (key) this.collapsedColKeys.add(key);
-                    for (const ch of node.children) addColKeys(ch, [...path, label]);
-                }
+                const children = this.getRealChildren(node);
+                if (children.length > 1 && key) this.collapsedColKeys.add(key);
+                for (const ch of children) addColKeys(ch, [...path, label]);
             };
             if (matrix.columns.root.children) {
                 for (const ch of matrix.columns.root.children) addColKeys(ch, []);
@@ -2201,15 +2202,53 @@ export class Visual implements IVisual {
             const addRowKeys = (node: DataViewMatrixNode, path: string[]) => {
                 const label = this.nodeLabel(node);
                 const key = [...path, label].filter(Boolean).join("||");
-                if (node.children && node.children.length) {
-                    if (key) this.collapsedRowKeys.add(key);
-                    for (const ch of node.children) addRowKeys(ch, [...path, label]);
-                }
+                const children = this.getRealChildren(node);
+                if (children.length > 1 && key) this.collapsedRowKeys.add(key);
+                for (const ch of children) addRowKeys(ch, [...path, label]);
             };
             if (matrix.rows.root.children) {
                 for (const ch of matrix.rows.root.children) addRowKeys(ch, []);
             }
         }
+    }
+
+    private pruneInvalidCollapsedState(matrix: DataViewMatrix): boolean {
+        const validRowKeys = this.getCollapsibleKeys(matrix.rows && matrix.rows.root);
+        const validColKeys = this.getCollapsibleKeys(matrix.columns && matrix.columns.root);
+        const rowsChanged = this.pruneKeySet(this.collapsedRowKeys, validRowKeys);
+        const colsChanged = this.pruneKeySet(this.collapsedColKeys, validColKeys);
+        return rowsChanged || colsChanged;
+    }
+
+    private getCollapsibleKeys(root: DataViewMatrixNode | undefined): Set<string> {
+        const keys = new Set<string>();
+        if (!root || !root.children) return keys;
+
+        const walk = (node: DataViewMatrixNode, path: string[]) => {
+            const label = this.nodeLabel(node);
+            const key = [...path, label].filter(Boolean).join("||");
+            const children = this.getRealChildren(node);
+            if (children.length > 1 && key) keys.add(key);
+            for (const child of children) walk(child, [...path, label]);
+        };
+
+        for (const child of this.getRealChildren(root)) walk(child, []);
+        return keys;
+    }
+
+    private getRealChildren(node: DataViewMatrixNode): DataViewMatrixNode[] {
+        return ((node.children || []) as DataViewMatrixNode[]).filter(child => !(child as any).isSubtotal);
+    }
+
+    private pruneKeySet(target: Set<string>, validKeys: Set<string>): boolean {
+        let changed = false;
+        for (const key of Array.from(target)) {
+            if (!validKeys.has(key)) {
+                target.delete(key);
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     // no custom aggregation: collapsed groups show blank cells to avoid misrepresenting measure semantics
@@ -2236,7 +2275,7 @@ export class Visual implements IVisual {
                     const childLabels = candidate.labels.slice(level + 1, hasMeasureLeaves ? depth - 1 : depth);
                     return childLabels.some(childLabel => !!(childLabel && childLabel.trim()));
                 });
-                const togglable = !!key && !!label && level < lastHeaderLevel && hasChildHeader;
+                const canRepresentGroup = !!key && !!label && level < lastHeaderLevel && hasChildHeader;
 
                 // Determine if this is the "effective leaf" for sorting
                 const isLeafHeader = (col.kind === "leaf" && level === depth - 1) || (col.kind === "collapsed" && level === col.collapsedLevel);
@@ -2254,7 +2293,7 @@ export class Visual implements IVisual {
                     if (nLabel !== label || nKey !== key || nCollapsed !== collapsed) break;
                     span++; j++;
                 }
-                row.push({ label, span, key, togglable, collapsed, isLeafHeader, queryKeys });
+                row.push({ label, span, key, togglable: canRepresentGroup && span > 1, collapsed, isLeafHeader, queryKeys });
                 i = j;
             }
             // If a full header row yields no labels at all (e.g., due to a higher
