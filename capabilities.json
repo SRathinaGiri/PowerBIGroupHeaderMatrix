@@ -131,6 +131,11 @@
                     "type": {
                         "numeric": true
                     }
+                },
+                "showDiagnostics": {
+                    "type": {
+                        "bool": true
+                    }
                 }
             }
         },

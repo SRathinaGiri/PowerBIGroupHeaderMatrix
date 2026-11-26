@@ -121,11 +121,17 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
     behaviorCard = new class extends FormattingSettingsCard {
         stickyHeaders = new ToggleSwitch({ name: "stickyHeaders", displayName: "Sticky headers", value: true });
         pageSize = new formattingSettings.NumUpDown({ name: "pageSize", displayName: "Page size", value: 100 });
+        showDiagnostics = new ToggleSwitch({
+            name: "showDiagnostics",
+            displayName: "Show diagnostics",
+            description: "Shows the data layout Power BI sends to the visual (for troubleshooting)",
+            value: false
+        });
         name: string = "state";
         displayName: string = "Behavior";
         // Note: Compact layout and Row header min width are managed in the toolbar
         // and persisted via capabilities, so they are intentionally omitted here.
-        slices: Array<FormattingSettingsSlice> = [this.stickyHeaders, this.pageSize];
+        slices: Array<FormattingSettingsSlice> = [this.stickyHeaders, this.pageSize, this.showDiagnostics];
     }();
 
     labelsCard = new class extends FormattingSettingsCard {

@@ -117,6 +117,7 @@ export class Visual implements IVisual {
     private contentHost: HTMLElement;
     private debugEl: HTMLElement;
     private debugEnabled: boolean = false;
+    private debugFromSetting: boolean = false;
     private table: HTMLTableElement | null = null;
     private formattingSettings: VisualFormattingSettingsModel;
     private formattingSettingsService: FormattingSettingsService;
@@ -124,6 +125,8 @@ export class Visual implements IVisual {
     private collapsedRowKeys: Set<string> = new Set();
     private collapsedColKeys: Set<string> = new Set();
     private lastMatrix: DataViewMatrix | null = null;
+    /** Last rendered layout and body rows, kept for the Ctrl+Alt+D diagnostics panel. */
+    private lastDebug: { cols: DisplayCol[]; rows: any[] } | null = null;
     private collapseInitialized: boolean = false;
     // Column sizing
     private columnWidthPx: Map<string, number> = new Map();
@@ -477,6 +480,7 @@ export class Visual implements IVisual {
         }, (v) => this.parseColor(v));
 
         const objs = dataView?.metadata?.objects;
+        this.debugFromSetting = this.getObjectValue<boolean>(objs, "state", "showDiagnostics", false) === true;
         this.rowFormatApplyToHeaders = this.getObjectValue<boolean>(objs, "rowFormatting", "applyToRowHeaders", true) !== false;
         const hAlign = (prop: string, def: string) => this.pickEnum(this.getObjectValue<any>(objs, "alignment", prop, def), ["left", "center", "right"], def);
         const vAlign = (prop: string) => this.pickEnum(this.getObjectValue<any>(objs, "alignment", prop, "middle"), ["top", "middle", "bottom"], "middle");
@@ -981,6 +985,7 @@ export class Visual implements IVisual {
 
         // Pre-process rows for sliceability (pagination and virtualization)
         let bodyRowIndex = 0;
+        this.lastDebug = { cols: displayCols, rows: rowsToRender };
         const preprocessedRows = rowsToRender.map((rowInfoRaw) => {
              const rowInfo = { ...rowInfoRaw } as any;
              const valuesMapForRow = rowInfo.valuesMap || {} as any;
@@ -1595,6 +1600,26 @@ export class Visual implements IVisual {
             out.push(indent + bits.join(" "));
             for (const ch of n.children || []) dump(ch, indent + "  ");
         };
+        const vsName = (i: number) => {
+            const vs = m.valueSources && m.valueSources[i];
+            return vs ? vs.displayName : `#${i}`;
+        };
+        out.push(`style roles: cellBg=[${this.cellBgColorMeasureIndices.join(",")}] cellFont=[${this.cellFontColorMeasureIndices.join(",")}]`
+            + ` rowBg=${this.rowBgMeasureIndex} rowFont=${this.rowFontMeasureIndex} rowBold=${this.rowBoldMeasureIndex} display=[${this.displayMeasureIndices.join(",")}]`);
+        if (this.lastDebug) {
+            out.push("display columns (offset:measure | colour offsets):");
+            for (const c of this.lastDebug.cols.slice(0, 30)) {
+                const colours = Array.from(c.colorOffsets.entries()).map(([mi, off]) => `${mi}@${off}`).join(",");
+                out.push(`  ${c.kind} ${c.offset}:${c.measureIndex} ${vsName(c.measureIndex)} | ${colours}`);
+            }
+            out.push("rows (label: offset=value):");
+            for (const r of this.lastDebug.rows.slice(0, 25)) {
+                const label = (r.labels || []).filter((l: string) => !!l).join(" / ") || "(row)";
+                const vm = r.valuesMap || {};
+                const cells = Object.keys(vm).slice(0, 30).map(k => `${k}=${vm[k] && vm[k].value}`).join(" ");
+                out.push(`  ${label}${r.isTotal ? " [total]" : ""}${r.collapsed ? " [collapsed]" : ""}: ${cells}`);
+            }
+        }
         out.push("column tree:");
         for (const ch of (m.columns && m.columns.root && m.columns.root.children) || []) dump(ch, "  ");
         const firstRow = m.rows && m.rows.root && m.rows.root.children && m.rows.root.children[0];
@@ -1948,8 +1973,10 @@ export class Visual implements IVisual {
     }
 
     private updateDebugOverlay(_ctx?: { table: HTMLTableElement; headerRows: Array<any>; measureCount: number; columnLeaves: DisplayCol[]; rowDepth: number; colDepth: number }) {
-        this.debugEl.style.display = this.debugEnabled ? "block" : "none";
-        if (this.debugEnabled) this.debugEl.textContent = this.describeMatrixShape();
+        // Shown by Format pane > Behavior > Show diagnostics, or Ctrl+Alt+D where the host passes keys through
+        const show = this.debugEnabled || this.debugFromSetting;
+        this.debugEl.style.display = show ? "block" : "none";
+        if (show) this.debugEl.textContent = this.describeMatrixShape();
     }
 
     private updateHighContrastState() {
