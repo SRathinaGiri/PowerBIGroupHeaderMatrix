@@ -1338,7 +1338,7 @@ export class Visual implements IVisual {
                 if (emittedCollapsed.has(gkey)) continue;
                 emittedCollapsed.add(gkey);
                 // A collapsed group shows the host subtotal of that group, one column per displayed measure
-                const totals = subtotalOffsets.get(gkey) || new Map<number, number>();
+                const totals = subtotalOffsets.get(gkey) || this.onlyDescendantOffsets(gkey, leaves, groupOffsets, subtotalOffsets);
                 for (const mi of this.displayMeasureIndices) {
                     const labels: string[] = [];
                     const keys: string[] = [];
@@ -1412,6 +1412,30 @@ export class Visual implements IVisual {
             });
         }
         return { displayCols: result, depth, groupDepth };
+    }
+
+    /**
+     * Total offsets for a collapsed column group the host sent no subtotal for. That only happens
+     * when the group has a single member, whose own (or deepest available) values are the total.
+     */
+    private onlyDescendantOffsets(
+        gkey: string,
+        leaves: Array<{ path: string[]; subtotalOf: string | null }>,
+        groupOffsets: Map<string, Map<number, number>>,
+        subtotalOffsets: Map<string, Map<number, number>>
+    ): Map<number, number> {
+        const prefix = gkey + KEY_SEP;
+        const under = (k: string) => k === gkey || k.startsWith(prefix);
+        // Prefer the shallowest descendant subtotal, then the single leaf group
+        const subKeys = Array.from(subtotalOffsets.keys()).filter(k => k !== gkey && under(k))
+            .sort((a, b) => a.split(KEY_SEP).length - b.split(KEY_SEP).length);
+        if (subKeys.length) {
+            const shallow = subKeys.filter(k => k.split(KEY_SEP).length === subKeys[0].split(KEY_SEP).length);
+            if (shallow.length === 1) return subtotalOffsets.get(shallow[0])!;
+        }
+        const leafGroups = new Set(leaves.filter(l => l.subtotalOf === null && under(l.path.join(KEY_SEP))).map(l => l.path.join(KEY_SEP)));
+        if (leafGroups.size === 1) return groupOffsets.get(Array.from(leafGroups)[0]) || new Map();
+        return new Map();
     }
 
     private isMeasureLevel(level: powerbi.DataViewHierarchyLevel | undefined): boolean {
@@ -1585,7 +1609,7 @@ export class Visual implements IVisual {
 
     private getCollapsibleKeysFor(axis: "rows" | "columns"): Set<string> {
         const keys = new Set<string>();
-        this.walkGroups(axis, (_node, key, _depth, children) => { if (children.length > 1) keys.add(key); });
+        this.walkGroups(axis, (_node, key, _depth, children) => { if (children.length > 0) keys.add(key); });
         return keys;
     }
 
@@ -1901,10 +1925,8 @@ export class Visual implements IVisual {
             const isRootNode = depth === 0 && !keyPart && keyPath.length === 0;
             // Children are ordered here (never in place) so clearing a sort restores the host order
             const realChildren = this.getSortedChildren(node, isRootNode ? 0 : depth + 1);
-            const hasCollapsibleChildren = realChildren.length > 1;
-            const subtotalChild = hasChildren ? (node.children as any[]).find(ch => (ch as any).isSubtotal) : null;
-            const hasGroupValues = hasChildren && node.values && Object.keys(node.values as any).length > 0;
-            const map = subtotalChild ? (subtotalChild.values as any) : (hasGroupValues ? (node.values as any) : null);
+            const hasCollapsibleChildren = realChildren.length > 0;
+            const map: any = hasChildren ? this.rowGroupValues(node) : null;
             const gKey = [...keyPath, keyPart].join(KEY_SEP);
             const isCollapsed = hasCollapsibleChildren && gKey && this.collapsedRowKeys.has(gKey);
 
@@ -2109,21 +2131,20 @@ export class Visual implements IVisual {
     }
 
     /**
-     * Collapses every visible, still-expanded collapsible group at the deepest depth that has one.
-     * Groups with a single child cannot collapse, so they must not decide the depth; otherwise a
-     * lone child (e.g. a state with one city) keeps that level "visible" and later presses do nothing.
+     * Collapses every visible, still-expanded group at the deepest depth that has one. The depth is
+     * taken from groups that can collapse, not from the deepest visible member.
      */
     private collapseOneLevel(axis: "rows" | "columns", target: Set<string>) {
         let deepest = 0;
         this.walkGroups(axis, (_node, key, depth, children) => {
             if (target.has(key)) return false;
-            if (children.length > 1) deepest = Math.max(deepest, depth);
+            if (children.length > 0) deepest = Math.max(deepest, depth);
         });
         if (!deepest) return;
         this.walkGroups(axis, (_node, key, depth, children) => {
             if (target.has(key)) return false;
             if (depth === deepest) {
-                if (children.length > 1) target.add(key);
+                if (children.length > 0) target.add(key);
                 return false;
             }
         });
@@ -2163,6 +2184,18 @@ export class Visual implements IVisual {
     }
 
     /** Row children without subtotal nodes, ordered by the active sort (a copy; the data view is never mutated). */
+    /** Values of a row group: the host subtotal, else its own values, else those of an only child. */
+    private rowGroupValues(node: DataViewMatrixNode): ValuesMap | null {
+        const hasValues = (n: DataViewMatrixNode) => !!(n.values && Object.keys(n.values).length > 0);
+        if (!node.children || !node.children.length) return hasValues(node) ? (node.values as ValuesMap) : null;
+        const subtotalChild = (node.children as any[]).find(ch => ch.isSubtotal);
+        if (subtotalChild && subtotalChild.values) return subtotalChild.values as ValuesMap;
+        if (hasValues(node)) return node.values as ValuesMap;
+        // A group with one member has the same totals as that member
+        const real = this.groupChildren(node, "rows");
+        return real.length === 1 ? this.rowGroupValues(real[0]) : null;
+    }
+
     private getSortedChildren(node: DataViewMatrixNode, childDepth: number): DataViewMatrixNode[] {
         const children = this.groupChildren(node, "rows");
         const sort = this.sortState;
