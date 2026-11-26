@@ -67,6 +67,8 @@ interface DisplayCol {
     /** valueSource index -> values-map offset for every measure of the same column group. */
     colorOffsets: Map<number, number>;
     collapsedLevel?: number;
+    /** Column group node used in selection ids (undefined for the grand total column). */
+    colNode?: DataViewMatrixNode;
 }
 
 interface HeaderCell {
@@ -202,11 +204,13 @@ export class Visual implements IVisual {
     private selectionManager: ISelectionManager;
     private hostElement: HTMLElement;
     /** Per rendered body row / cell data for the delegated tbody event handlers. */
-    private rowRefs: WeakMap<HTMLTableRowElement, { rowInfo: any; selectionId?: ISelectionId }> = new WeakMap();
-    private cellRefs: WeakMap<HTMLTableCellElement, { value: any; col: DisplayCol }> = new WeakMap();
+    private rowRefs: WeakMap<HTMLTableRowElement, { rowInfo: any; selectable: boolean }> = new WeakMap();
+    private cellRefs: WeakMap<HTMLTableCellElement, { value: any; col: DisplayCol; selectionId?: ISelectionId }> = new WeakMap();
     /** Fingerprint of the last rendered data/formatting and of the view state it was rendered with. */
     private lastRenderSig: string = "";
     private lastRenderStateKey: string = "";
+    /** True while some cells are dimmed for a selection (so clearing knows there is work to do). */
+    private selectionShown: boolean = false;
     private events: IVisualEventService;
     private resizeObserver: ResizeObserver | null = null;
     private selectedIds: ISelectionId[] = [];
@@ -1085,10 +1089,6 @@ export class Visual implements IVisual {
         const renderBody = (rowsToRenderSlice: any[]) => {
             while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
 
-            // Selection state is the same for every cell: compute it once per render
-            const currentSelection = this.selectedIds.length ? this.selectedIds : this.selectionManager.getSelectionIds();
-            const hasSelection = currentSelection.length > 0 || this.selectionManager.hasSelection();
-
             for (const rowInfo of rowsToRenderSlice) {
                 const labelsToUse = rowInfo.labelsToUse;
                 const rowMeasureBg = rowInfo.rowMeasureBg;
@@ -1103,12 +1103,8 @@ export class Visual implements IVisual {
                     if (zebraRowColor) tr.style.backgroundColor = zebraRowColor;
                 }
 
-                let rowSelectionId: ISelectionId | undefined;
-                let rowIsSelected = false;
-                if (!rowInfo.isTotal && this.allowInteractions && rowInfo.node) {
-                    rowSelectionId = this.createSelectionId(rowInfo.node);
-                    rowIsSelected = currentSelection.some(id => this.selectionIdsMatch(id, rowSelectionId!));
-                }
+                // Data rows are selectable; each cell's id (row + column group) is built on demand
+                const rowSelectable = !rowInfo.isTotal && this.allowInteractions && !!rowInfo.node;
             // Row header: base colors, then the measure colors, then the whole-row style (if enabled)
             const headerRowStyle = (this.rowFormatApplyToHeaders && rowStyle) ? rowStyle : null;
             const rowStyleBg = (headerRowStyle && headerRowStyle.bg) || rowMeasureBg || this.rowHeaderBg || "";
@@ -1220,10 +1216,10 @@ export class Visual implements IVisual {
             }
 
             const valuesMap: ValuesMap = (rowInfo as any).valuesMap || {};
-            const rowAriaLabel = rowSelectionId ? this.getAccessibleRowLabel(rowInfo) : "";
+            const rowAriaLabel = rowSelectable ? this.getAccessibleRowLabel(rowInfo) : "";
             // Clicks, keys, context menu and tooltips are handled once on the tbody (see
             // attachBodyEvents); cells only record what those handlers need.
-            this.rowRefs.set(tr, { rowInfo, selectionId: rowSelectionId });
+            this.rowRefs.set(tr, { rowInfo, selectable: rowSelectable });
             for (let c = 0; c < colLeafCount; c++) {
                 const col = columnLeaves[c];
                 const globalM = col.measureIndex;
@@ -1253,10 +1249,8 @@ export class Visual implements IVisual {
                 }
                 this.applySeparator(td, col.measureIndex);
 
-                if (rowSelectionId) {
-                    if (hasSelection && !rowIsSelected) td.style.opacity = "0.5";
+                if (rowSelectable) {
                     td.tabIndex = 0;
-                    td.setAttribute("aria-selected", String(rowIsSelected));
                     td.setAttribute("aria-label", `${rowAriaLabel} ${td.textContent || ""}`.trim());
                 }
                 this.cellRefs.set(td, { value: v, col });
@@ -1264,6 +1258,8 @@ export class Visual implements IVisual {
             }
             tbody.appendChild(tr);
         }
+        // Dim cells outside the current selection (cheap no-op when nothing is selected)
+        this.applySelectionState(tbody);
     }; // end of renderBody
 
     if (this.scrollListener) {
@@ -1379,11 +1375,11 @@ export class Visual implements IVisual {
         // Fallback for hosts that send several measures without a measure level
         const expandMeasuresPerLeaf = !hasMeasureLevel && vsArr.length > 1;
 
-        type Leaf = { offset: number; measureIndex: number; path: string[]; labelPath: string[]; subtotalOf: string | null };
+        type Leaf = { offset: number; measureIndex: number; path: string[]; labelPath: string[]; subtotalOf: string | null; nodes: DataViewMatrixNode[] };
         const leaves: Leaf[] = [];
         let leafCounter = 0;
-        const walk = (node: DataViewMatrixNode, path: string[], labelPath: string[], subtotalOf: string | null, measureIndex: number, measureOrdinal: number) => {
-            let p = path, lp = labelPath, st = subtotalOf, mi = measureIndex;
+        const walk = (node: DataViewMatrixNode, path: string[], labelPath: string[], subtotalOf: string | null, measureIndex: number, measureOrdinal: number, groupNodes: DataViewMatrixNode[]) => {
+            let p = path, lp = labelPath, st = subtotalOf, mi = measureIndex, gn = groupNodes;
             const isSubtotal = !!(node as any).isSubtotal;
             const isMeasure = this.isColumnMeasureNode(node);
             // A total node can itself sit on the measure level, so both checks apply independently
@@ -1392,22 +1388,23 @@ export class Visual implements IVisual {
             if (!isSubtotal && !isMeasure) {
                 p = [...path, this.nodeKey(node)];
                 lp = [...labelPath, this.nodeLabel(node, columns)];
+                gn = [...groupNodes, node];
             }
             if (!node.children || node.children.length === 0) {
                 const offset = leafCounter++;
                 if (expandMeasuresPerLeaf) {
                     for (let m = 0; m < vsArr.length; m++) {
-                        leaves.push({ offset: offset * vsArr.length + m, measureIndex: m, path: p, labelPath: lp, subtotalOf: st });
+                        leaves.push({ offset: offset * vsArr.length + m, measureIndex: m, path: p, labelPath: lp, subtotalOf: st, nodes: gn });
                     }
                 } else {
-                    leaves.push({ offset, measureIndex: mi, path: p, labelPath: lp, subtotalOf: st });
+                    leaves.push({ offset, measureIndex: mi, path: p, labelPath: lp, subtotalOf: st, nodes: gn });
                 }
                 return;
             }
-            this.walkColumnChildren(node.children, (ch, ordinal) => walk(ch, p, lp, st, mi, ordinal));
+            this.walkColumnChildren(node.children, (ch, ordinal) => walk(ch, p, lp, st, mi, ordinal, gn));
         };
         if (columns && columns.root && columns.root.children) {
-            this.walkColumnChildren(columns.root.children, (ch, ordinal) => walk(ch, [], [], null, 0, ordinal));
+            this.walkColumnChildren(columns.root.children, (ch, ordinal) => walk(ch, [], [], null, 0, ordinal, []));
         }
 
         // Every value in a row node records which measure it belongs to (valueSourceIndex, omitted
@@ -1483,6 +1480,7 @@ export class Visual implements IVisual {
                         keys,
                         uniqueKey: `${gkey}${KEY_SEP}#m${mi}`,
                         colorOffsets: totals,
+                        colNode: leaf.nodes[collapsedAt],
                         collapsedLevel: collapsedAt
                     });
                 }
@@ -1531,7 +1529,9 @@ export class Visual implements IVisual {
                 labels,
                 keys,
                 uniqueKey: `${baseKey}${KEY_SEP}#m${leaf.measureIndex}`,
-                colorOffsets: (leaf.subtotalOf !== null ? subtotalOffsets.get(leaf.subtotalOf) : groupOffsets.get(baseKey)) || new Map()
+                colorOffsets: (leaf.subtotalOf !== null ? subtotalOffsets.get(leaf.subtotalOf) : groupOffsets.get(baseKey)) || new Map(),
+                // Deepest column group of this cell (none for the grand total column)
+                colNode: leaf.nodes.length ? leaf.nodes[leaf.nodes.length - 1] : undefined
             });
         }
         // Row-level style measures are read per row: the grand-total column first (pure row
@@ -1992,22 +1992,22 @@ export class Visual implements IVisual {
             });
         };
         tbody.addEventListener("click", (e) => {
-            const ref = rowOf(cellOf(e));
-            if (!ref || !ref.selectionId) return;
-            select(ref.selectionId, e.ctrlKey || e.metaKey);
+            const id = this.cellSelectionId(cellOf(e));
+            if (!id) return;
+            select(id, e.ctrlKey || e.metaKey);
             e.stopPropagation();
         });
         tbody.addEventListener("keydown", (e) => {
             if (e.key !== "Enter" && e.key !== " ") return;
-            const ref = rowOf(cellOf(e));
-            if (!ref || !ref.selectionId) return;
+            const id = this.cellSelectionId(cellOf(e));
+            if (!id) return;
             e.preventDefault();
-            select(ref.selectionId, e.ctrlKey || e.metaKey);
+            select(id, e.ctrlKey || e.metaKey);
         });
         tbody.addEventListener("contextmenu", (e) => {
-            const ref = rowOf(cellOf(e));
-            if (!ref || !ref.selectionId) return; // falls through to the visual-level menu
-            this.selectionManager.showContextMenu(ref.selectionId, { x: e.clientX, y: e.clientY });
+            const id = this.cellSelectionId(cellOf(e));
+            if (!id) return; // falls through to the visual-level menu
+            this.selectionManager.showContextMenu(id, { x: e.clientX, y: e.clientY });
             e.preventDefault();
             e.stopPropagation();
         });
@@ -2038,7 +2038,7 @@ export class Visual implements IVisual {
                 coordinates: coords(e),
                 isTouchEvent: false,
                 dataItems: this.getTooltipData(cell.value, ref && ref.rowInfo, cell.col, cell.col.measureIndex),
-                identities: [(ref && ref.selectionId) || this.createEmptySelectionId()]
+                identities: [this.cellSelectionId(td) || this.createEmptySelectionId()]
             };
             current = { td, args };
             tooltip.show(args);
@@ -2046,22 +2046,38 @@ export class Visual implements IVisual {
         tbody.addEventListener("mouseleave", hide);
     }
 
-    /** Re-applies selection dimming and aria-selected to the rendered rows without re-rendering. */
-    private applySelectionState() {
-        const tbody = this.table && this.table.tBodies[0];
+    /**
+     * Selection id of a data cell: its row member plus its column group (so other visuals filter by
+     * both, e.g. Category = Furniture and State = Illinois). Built on first use and cached.
+     */
+    private cellSelectionId(td: HTMLTableCellElement | null): ISelectionId | undefined {
+        if (!td) return undefined;
+        const ref = this.rowRefs.get(td.parentElement as HTMLTableRowElement);
+        const cell = this.cellRefs.get(td);
+        if (!ref || !ref.selectable || !cell) return undefined;
+        if (!cell.selectionId) cell.selectionId = this.createSelectionId(ref.rowInfo.node, cell.col.colNode);
+        return cell.selectionId;
+    }
+
+    /** Re-applies selection dimming and aria-selected to the rendered cells without re-rendering. */
+    private applySelectionState(body?: HTMLTableSectionElement) {
+        const tbody = body || (this.table && this.table.tBodies[0]);
         if (!tbody) return;
         const current = this.selectedIds.length ? this.selectedIds : this.selectionManager.getSelectionIds();
-        const hasSelection = current.length > 0 || this.selectionManager.hasSelection();
+        const hasSelection = current.length > 0;
+        if (!hasSelection && !this.selectionShown) return;
         for (const tr of Array.from(tbody.rows)) {
             const ref = this.rowRefs.get(tr);
-            if (!ref || !ref.selectionId) continue;
-            const selected = current.some(id => this.selectionIdsMatch(id, ref.selectionId!));
+            if (!ref || !ref.selectable) continue;
             for (const td of Array.from(tr.cells)) {
                 if (td.tagName !== "TD") continue;
+                const id = hasSelection ? this.cellSelectionId(td as HTMLTableCellElement) : undefined;
+                const selected = !!id && current.some(s => this.selectionIdsMatch(s, id));
                 td.style.opacity = (hasSelection && !selected) ? "0.5" : "";
                 td.setAttribute("aria-selected", String(selected));
             }
         }
+        this.selectionShown = hasSelection;
     }
 
     /** "Cell font color from" / "Cell background from" choice of a measure column (auto when unset). */
