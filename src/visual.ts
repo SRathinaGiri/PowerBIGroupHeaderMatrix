@@ -205,6 +205,14 @@ export class Visual implements IVisual {
         this.root.setAttribute("role", "region");
         this.root.setAttribute("aria-label", "Group Header Matrix visual");
         this.root.addEventListener("contextmenu", (e) => this.showVisualContextMenu(e));
+        // Hidden diagnostics: Ctrl+Alt+D shows the data shape Power BI sent
+        this.root.addEventListener("keydown", (e) => {
+            if (e.ctrlKey && e.altKey && (e.key === "d" || e.key === "D")) {
+                e.preventDefault();
+                this.debugEnabled = !this.debugEnabled;
+                this.updateDebugOverlay();
+            }
+        });
 
         // Toolbar (fixed at top)
         this.toolbar = document.createElement("div");
@@ -1251,13 +1259,14 @@ export class Visual implements IVisual {
         type Leaf = { offset: number; measureIndex: number; path: string[]; labelPath: string[]; subtotalOf: string | null };
         const leaves: Leaf[] = [];
         let leafCounter = 0;
-        const walk = (node: DataViewMatrixNode, path: string[], labelPath: string[], subtotalOf: string | null, measureIndex: number) => {
+        const walk = (node: DataViewMatrixNode, path: string[], labelPath: string[], subtotalOf: string | null, measureIndex: number, measureOrdinal: number) => {
             let p = path, lp = labelPath, st = subtotalOf, mi = measureIndex;
-            if ((node as any).isSubtotal) {
-                st = path.join(KEY_SEP); // subtotal of the parent group ("" = grand total)
-            } else if (this.isColumnMeasureNode(node)) {
-                mi = this.measureIndexOfColumnNode(node, vsArr);
-            } else {
+            const isSubtotal = !!(node as any).isSubtotal;
+            const isMeasure = this.isColumnMeasureNode(node);
+            // A total node can itself sit on the measure level, so both checks apply independently
+            if (isSubtotal && st === null) st = path.join(KEY_SEP); // subtotal of the parent group ("" = grand total)
+            if (isMeasure) mi = this.measureIndexOfColumnNode(node, vsArr, measureOrdinal);
+            if (!isSubtotal && !isMeasure) {
                 p = [...path, this.nodeKey(node)];
                 lp = [...labelPath, this.nodeLabel(node, columns)];
             }
@@ -1272,10 +1281,22 @@ export class Visual implements IVisual {
                 }
                 return;
             }
-            for (const ch of node.children) walk(ch, p, lp, st, mi);
+            this.walkColumnChildren(node.children, (ch, ordinal) => walk(ch, p, lp, st, mi, ordinal));
         };
         if (columns && columns.root && columns.root.children) {
-            for (const ch of columns.root.children) walk(ch, [], [], null, 0);
+            this.walkColumnChildren(columns.root.children, (ch, ordinal) => walk(ch, [], [], null, 0, ordinal));
+        }
+
+        // Every value in a row node records which measure it belongs to (valueSourceIndex, omitted
+        // when 0). That is authoritative, so it overrides what the column tree implied.
+        if (hasMeasureLevel) {
+            const sample = this.sampleRowValues(matrix, leafCounter);
+            // Only trust it when the host actually populates it (some non-zero index is present)
+            const hostSetsIndex = Object.keys(sample).some(k => !!((sample as any)[k] && (sample as any)[k].valueSourceIndex));
+            for (const leaf of hostSetsIndex ? leaves : []) {
+                const cell = sample[leaf.offset];
+                if (cell) leaf.measureIndex = (cell as any).valueSourceIndex || 0;
+            }
         }
 
         // Offsets of every measure per column group, used for colour lookups
@@ -1403,11 +1424,79 @@ export class Visual implements IVisual {
         return this.isMeasureLevel(levels ? levels[node.level] : undefined);
     }
 
-    /** Maps a measure-level column node to its index in matrix.valueSources. */
-    private measureIndexOfColumnNode(node: DataViewMatrixNode, valueSources: powerbi.DataViewMetadataColumn[]): number {
+    /** Merges the values maps of the first row nodes until every column offset has been seen. */
+    private sampleRowValues(matrix: DataViewMatrix, leafCount: number): ValuesMap {
+        const sample: ValuesMap = {};
+        let seen = 0;
+        let visited = 0;
+        const visit = (node: DataViewMatrixNode | undefined): boolean => {
+            if (!node || seen >= leafCount || visited > 500) return true;
+            visited++;
+            if (node.values) {
+                for (const k of Object.keys(node.values)) {
+                    const key = +k;
+                    if (!(key in sample)) { sample[key] = (node.values as any)[k]; seen++; }
+                }
+            }
+            for (const ch of node.children || []) if (visit(ch)) return true;
+            return false;
+        };
+        visit(matrix.rows && matrix.rows.root);
+        return sample;
+    }
+
+    /** Calls cb for each child with its position among the measure-level siblings (-1 for other nodes). */
+    private walkColumnChildren(children: DataViewMatrixNode[], cb: (child: DataViewMatrixNode, measureOrdinal: number) => void) {
+        let ordinal = 0;
+        for (const ch of children) cb(ch, this.isColumnMeasureNode(ch) ? ordinal++ : -1);
+    }
+
+    /** Ctrl+Alt+D overlay: the column/row hierarchy shape Power BI sent, for diagnosing layouts. */
+    private describeMatrixShape(): string {
+        const m = this.lastMatrix;
+        if (!m) return "No data";
+        const out: string[] = [];
+        const src = (s: any) => `${s.displayName}${s.isMeasure ? "*" : ""}${s.roles ? "{" + Object.keys(s.roles).join(",") + "}" : ""}`;
+        out.push("valueSources: " + (m.valueSources || []).map((s, i) => `${i}:${src(s)}`).join(" | "));
+        out.push("column levels: " + ((m.columns && m.columns.levels) || []).map((l, i) => `${i}:[${l.sources.map(src).join(",")}]`).join(" "));
+        out.push("row levels: " + ((m.rows && m.rows.levels) || []).map((l, i) => `${i}:[${l.sources.map(src).join(",")}]`).join(" "));
+        let lines = 0;
+        let leaf = 0;
+        const dump = (n: DataViewMatrixNode, indent: string) => {
+            if (lines++ > 120) return;
+            const bits = [`lvl=${n.level}`];
+            if (n.levelSourceIndex !== undefined) bits.push(`lsi=${n.levelSourceIndex}`);
+            if ((n as any).isSubtotal) bits.push("SUBTOTAL");
+            const raw = this.nodeRawValue(n);
+            if (raw !== undefined) bits.push(`"${raw}"`);
+            if (!n.children || !n.children.length) bits.push(`leaf#${leaf++}`);
+            out.push(indent + bits.join(" "));
+            for (const ch of n.children || []) dump(ch, indent + "  ");
+        };
+        out.push("column tree:");
+        for (const ch of (m.columns && m.columns.root && m.columns.root.children) || []) dump(ch, "  ");
+        const firstRow = m.rows && m.rows.root && m.rows.root.children && m.rows.root.children[0];
+        if (firstRow && firstRow.values) {
+            out.push("first row values: " + Object.keys(firstRow.values).slice(0, 40).map(k => {
+                const c = (firstRow.values as any)[k];
+                return `${k}=${c && c.value}${c && c.valueSourceIndex !== undefined ? "@" + c.valueSourceIndex : ""}`;
+            }).join(" "));
+        }
+        return out.join("\n");
+    }
+
+    /**
+     * Maps a measure-level column node to its index in matrix.valueSources.
+     * Power BI omits levelSourceIndex when it is 0, so a missing value falls back to the
+     * node's position among its measure siblings.
+     */
+    private measureIndexOfColumnNode(node: DataViewMatrixNode, valueSources: powerbi.DataViewMetadataColumn[], measureOrdinal: number = -1): number {
         const levels = this.lastMatrix && this.lastMatrix.columns && this.lastMatrix.columns.levels;
-        const lsi = node.levelSourceIndex || 0;
-        const src = levels && node.level !== undefined && levels[node.level] && levels[node.level].sources[lsi];
+        const level = levels && node.level !== undefined ? levels[node.level] : undefined;
+        const sourceCount = level && level.sources ? level.sources.length : 0;
+        let lsi = node.levelSourceIndex;
+        if (lsi === undefined || lsi === null) lsi = (measureOrdinal >= 0 && measureOrdinal < sourceCount) ? measureOrdinal : 0;
+        const src = level && level.sources[lsi];
         if (src) {
             let idx = valueSources.findIndex(vs => vs.queryName === src.queryName);
             if (idx < 0) idx = valueSources.findIndex(vs => vs.index === src.index);
@@ -1680,7 +1769,10 @@ export class Visual implements IVisual {
         return null;
     }
 
-    private updateDebugOverlay(_ctx?: { table: HTMLTableElement; headerRows: Array<any>; measureCount: number; columnLeaves: DisplayCol[]; rowDepth: number; colDepth: number }) { /* debug disabled */ return; }
+    private updateDebugOverlay(_ctx?: { table: HTMLTableElement; headerRows: Array<any>; measureCount: number; columnLeaves: DisplayCol[]; rowDepth: number; colDepth: number }) {
+        this.debugEl.style.display = this.debugEnabled ? "block" : "none";
+        if (this.debugEnabled) this.debugEl.textContent = this.describeMatrixShape();
+    }
 
     private updateHighContrastState() {
         const palette = this.host.colorPalette;
