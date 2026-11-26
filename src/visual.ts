@@ -2108,17 +2108,24 @@ export class Visual implements IVisual {
         this.expandOneLevel(this.collapsedColKeys);
     }
 
-    /** Collapses every collapsible group at the deepest level that is still expanded. */
+    /**
+     * Collapses every visible, still-expanded collapsible group at the deepest depth that has one.
+     * Groups with a single child cannot collapse, so they must not decide the depth; otherwise a
+     * lone child (e.g. a state with one city) keeps that level "visible" and later presses do nothing.
+     */
     private collapseOneLevel(axis: "rows" | "columns", target: Set<string>) {
-        const currentDepth = this.getDisplayedDepth(axis);
-        if (currentDepth <= 1) return;
-        const targetDepth = currentDepth - 1;
+        let deepest = 0;
         this.walkGroups(axis, (_node, key, depth, children) => {
-            if (depth === targetDepth) {
+            if (target.has(key)) return false;
+            if (children.length > 1) deepest = Math.max(deepest, depth);
+        });
+        if (!deepest) return;
+        this.walkGroups(axis, (_node, key, depth, children) => {
+            if (target.has(key)) return false;
+            if (depth === deepest) {
                 if (children.length > 1) target.add(key);
                 return false;
             }
-            if (target.has(key)) return false;
         });
     }
 
