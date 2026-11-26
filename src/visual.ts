@@ -1103,8 +1103,9 @@ export class Visual implements IVisual {
                     if (zebraRowColor) tr.style.backgroundColor = zebraRowColor;
                 }
 
-                // Data rows are selectable; each cell's id (row + column group) is built on demand
-                const rowSelectable = !rowInfo.isTotal && this.allowInteractions && !!rowInfo.node;
+                // Leaf and group/subtotal rows are selectable (a group row selects the whole group);
+                // the grand total has no node. Each cell's id (row + column group) is built on demand.
+                const rowSelectable = this.allowInteractions && !!rowInfo.node;
             // Row header: base colors, then the measure colors, then the whole-row style (if enabled)
             const headerRowStyle = (this.rowFormatApplyToHeaders && rowStyle) ? rowStyle : null;
             const rowStyleBg = (headerRowStyle && headerRowStyle.bg) || rowMeasureBg || this.rowHeaderBg || "";
@@ -2380,6 +2381,7 @@ export class Visual implements IVisual {
                         labels,
                         valuesMap: map || {},
                         isTotal: true, // Treat as total for styling/behavior
+                        node, // group node: clicking the row selects the whole group
                         toggleKey: hasCollapsibleChildren ? gKey : undefined,
                         depth,
                         collapsed: true
@@ -2399,6 +2401,7 @@ export class Visual implements IVisual {
                             labels,
                             valuesMap: {}, // Empty values
                             isTotal: true, // Mark as total/group header
+                            node, // group node: clicking the row selects the whole group
                             toggleKey: hasCollapsibleChildren ? gKey : undefined,
                             depth,
                             collapsed: false
@@ -2410,6 +2413,7 @@ export class Visual implements IVisual {
                                 labels,
                                 valuesMap: map,
                                 isTotal: true,
+                                node, // group node: clicking the row selects the whole group
                                 toggleKey: hasCollapsibleChildren ? gKey : undefined,
                                 depth,
                                 collapsed: false
@@ -2420,6 +2424,7 @@ export class Visual implements IVisual {
                                 labels,
                                 valuesMap: {},
                                 isTotal: true,
+                                node, // group node: clicking the row selects the whole group
                                 toggleKey: hasCollapsibleChildren ? gKey : undefined,
                                 depth,
                                 collapsed: false
@@ -2444,6 +2449,7 @@ export class Visual implements IVisual {
                             labels: totalLabels,
                             valuesMap: map,
                             isTotal: true,
+                            node, // group node: clicking the row selects the whole group
                             depth,
                             // No toggle on bottom total usually, but indentation matches group
                         });
@@ -2465,7 +2471,7 @@ export class Visual implements IVisual {
                 labels[depth] = collapsedFlag ? label : `${label} Total`;
                 const toggles: { [key: number]: string } = {};
                 if (hasCollapsibleChildren && gKey) toggles[depth] = gKey;
-                rows.push({ labels, valuesMap: map!, isTotal: true, toggleKey: hasCollapsibleChildren ? gKey || undefined : undefined, depth, collapsed: collapsedFlag, toggles });
+                rows.push({ labels, valuesMap: map!, isTotal: true, toggleKey: hasCollapsibleChildren ? gKey || undefined : undefined, depth, collapsed: collapsedFlag, toggles, node });
             };
 
             if (includeSubtotal && (!subtotalAtBottom || isCollapsed)) {
