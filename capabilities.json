@@ -270,6 +270,29 @@
                 }
             }
         },
+        "alignment": {
+            "displayName": "Alignment",
+            "properties": {
+                "rowHeaderHAlign": { "type": { "formatting": { "alignment": true } } },
+                "rowHeaderVAlign": { "type": { "enumeration": [
+                    { "displayName": "Top", "value": "top" },
+                    { "displayName": "Middle", "value": "middle" },
+                    { "displayName": "Bottom", "value": "bottom" }
+                ] } },
+                "colHeaderHAlign": { "type": { "formatting": { "alignment": true } } },
+                "colHeaderVAlign": { "type": { "enumeration": [
+                    { "displayName": "Top", "value": "top" },
+                    { "displayName": "Middle", "value": "middle" },
+                    { "displayName": "Bottom", "value": "bottom" }
+                ] } },
+                "valuesHAlign": { "type": { "formatting": { "alignment": true } } },
+                "valuesVAlign": { "type": { "enumeration": [
+                    { "displayName": "Top", "value": "top" },
+                    { "displayName": "Middle", "value": "middle" },
+                    { "displayName": "Bottom", "value": "bottom" }
+                ] } }
+            }
+        },
         "colors": {
             "displayName": "Colors",
             "properties": {

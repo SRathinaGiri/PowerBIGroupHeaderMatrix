@@ -26,6 +26,7 @@
 
 "use strict";
 
+import type powerbi from "powerbi-visuals-api";
 import { formattingSettings } from "powerbi-visuals-utils-formattingmodel";
 
 import FormattingSettingsCard = formattingSettings.SimpleCard;
@@ -35,6 +36,35 @@ import ToggleSwitch = formattingSettings.ToggleSwitch;
 import TextInput = formattingSettings.TextInput;
 import ItemDropdown = formattingSettings.ItemDropdown;
 import ColorPicker = formattingSettings.ColorPicker;
+
+const verticalAlignItems = [
+    { value: "top", displayName: "Top" },
+    { value: "middle", displayName: "Middle" },
+    { value: "bottom", displayName: "Bottom" }
+];
+
+/** Horizontal + vertical alignment for one area; properties are <prefix>HAlign / <prefix>VAlign on the "alignment" object. */
+function alignmentGroup(prefix: string, displayName: string, defaultHorizontal: string): formattingSettings.Group {
+    return new formattingSettings.Group({
+        name: `${prefix}Alignment`,
+        displayName,
+        slices: [
+            new formattingSettings.AlignmentGroup({
+                name: `${prefix}HAlign`,
+                displayName: "Horizontal",
+                // Literal of the const enum AlignmentGroupMode.Horizonal (const enums are not emitted at runtime)
+                mode: "horizontalAlignment" as powerbi.visuals.AlignmentGroupMode,
+                value: defaultHorizontal
+            }),
+            new ItemDropdown({
+                name: `${prefix}VAlign`,
+                displayName: "Vertical",
+                items: verticalAlignItems,
+                value: verticalAlignItems[1]
+            })
+        ]
+    });
+}
 
 /**
 * visual settings model class
@@ -176,5 +206,15 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
         slices: Array<FormattingSettingsSlice> = [this.preset];
     }();
 
-    cards = [this.behaviorCard, this.labelsCard, this.colorsCard, this.gridCard, this.zebraCard, this.zebraColsCard, this.subtotalsCard, this.grandTotalCard, this.themeCard];
+    alignmentCard = new class extends formattingSettings.CompositeCard {
+        name: string = "alignment";
+        displayName: string = "Alignment";
+        groups: Array<formattingSettings.Group> = [
+            alignmentGroup("rowHeader", "Row headers", "left"),
+            alignmentGroup("colHeader", "Column headers", "center"),
+            alignmentGroup("values", "Values", "right")
+        ];
+    }();
+
+    cards = [this.behaviorCard, this.labelsCard, this.alignmentCard, this.colorsCard, this.gridCard, this.zebraCard, this.zebraColsCard, this.subtotalsCard, this.grandTotalCard, this.themeCard];
 }

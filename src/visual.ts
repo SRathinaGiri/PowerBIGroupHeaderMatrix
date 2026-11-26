@@ -160,6 +160,11 @@ export class Visual implements IVisual {
     private activeSortOffset: number | undefined = undefined;
     private formatterCache: Map<string, ReturnType<typeof valueFormatter.create>> = new Map();
     private virtualRowHeight: number = 25;
+    private align = {
+        rowHeaderH: "left", rowHeaderV: "middle",
+        colHeaderH: "center", colHeaderV: "middle",
+        valuesH: "right", valuesV: "middle"
+    };
 
     private viewMode: string = "normal";
     private currentPage: number = 1;
@@ -436,7 +441,16 @@ export class Visual implements IVisual {
         this.dataFontFamily = this.getObjectValue<any>(dataView?.metadata?.objects, "labels", "dataFontFamily", { value: "" } as any as string) as any as string || this.getObjectValue<string>(dataView?.metadata?.objects, "labels", "dataFontFamily", "");
         this.dataBold = this.getObjectValue<boolean>(dataView?.metadata?.objects, "labels", "dataBold", false);
 
-        const themePresetObj = this.getObjectValue<any>(dataView?.metadata?.objects, "theme", "preset", { value: "Default" } as any);
+        const objs = dataView?.metadata?.objects;
+        const hAlign = (prop: string, def: string) => this.pickEnum(this.getObjectValue<any>(objs, "alignment", prop, def), ["left", "center", "right"], def);
+        const vAlign = (prop: string) => this.pickEnum(this.getObjectValue<any>(objs, "alignment", prop, "middle"), ["top", "middle", "bottom"], "middle");
+        this.align = {
+            rowHeaderH: hAlign("rowHeaderHAlign", "left"), rowHeaderV: vAlign("rowHeaderVAlign"),
+            colHeaderH: hAlign("colHeaderHAlign", "center"), colHeaderV: vAlign("colHeaderVAlign"),
+            valuesH: hAlign("valuesHAlign", "right"), valuesV: vAlign("valuesVAlign")
+        };
+
+        const themePresetObj =this.getObjectValue<any>(dataView?.metadata?.objects, "theme", "preset", { value: "Default" } as any);
         const themePreset = typeof themePresetObj === "string" ? themePresetObj : (themePresetObj && themePresetObj.value) || "Default";
 
         let fallbackRowHeaderColor = "";
@@ -763,6 +777,8 @@ export class Visual implements IVisual {
                 // Text content: Compact layout uses "Rows" or first level; Tabular uses specific level names
                 const levelName = this.compactLayout ? (this.rowLevelNames[0] || "Rows") : (this.rowLevelNames[r] || "");
                 corner.textContent = levelName;
+                // The corner sits above the row headers and beside the column headers
+                this.setAlignment(corner, this.align.rowHeaderH, this.align.colHeaderV);
 
                 if (this.rowHeaderBg) corner.style.backgroundColor = this.rowHeaderBg;
                 if (this.rowHeaderColor) corner.style.color = this.rowHeaderColor;
@@ -782,6 +798,7 @@ export class Visual implements IVisual {
                 const th = document.createElement("th");
                 th.className = "ghm-colheader";
                 th.title = cell.label;
+                this.setAlignment(th, this.align.colHeaderH, this.align.colHeaderV);
                 // Toggle indicator and label
                 if (cell.togglable) {
                     const toggle = document.createElement("span");
@@ -1086,6 +1103,7 @@ export class Visual implements IVisual {
                 const col = columnLeaves[c];
                 const globalM = col.measureIndex;
                 const td = document.createElement("td");
+                this.setAlignment(td, this.align.valuesH, this.align.valuesV);
                 const v = this.getCellValue(valuesMap, col);
                 td.textContent = this.formatValueByMeasure(v, globalM);
                 if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
@@ -1724,6 +1742,18 @@ export class Visual implements IVisual {
         return (v !== undefined) ? (v as T) : defaultValue;
     }
 
+    /** Returns the enumeration value (plain or {value}) when it is one of the allowed values, else the default. */
+    private pickEnum(input: any, allowed: string[], def: string): string {
+        const v = typeof input === "string" ? input : (input && typeof input.value === "string" ? input.value : "");
+        const lower = v.toLowerCase();
+        return allowed.indexOf(lower) >= 0 ? lower : def;
+    }
+
+    private setAlignment(el: HTMLElement, horizontal: string, vertical: string) {
+        el.style.textAlign = horizontal;
+        el.style.verticalAlign = vertical;
+    }
+
     private parseColor(input: any): string {
         if (input == null) return "";
         if (typeof input === "string") return input;
@@ -1859,6 +1889,7 @@ export class Visual implements IVisual {
 
     private applyRowHeaderStyle(th: HTMLElement, level?: number) {
         const style = (level !== undefined && this.rowLevelStyles[level]) ? this.rowLevelStyles[level] : {};
+        this.setAlignment(th, this.align.rowHeaderH, this.align.rowHeaderV);
         const fs = style.fontSize ?? this.rowHeaderFontSize; if (fs) th.style.fontSize = `${fs}px`;
         th.style.fontFamily = (style.fontFamily || this.rowHeaderFontFamily) || "";
         if (this.rowHeaderBold || style.fontWeight) th.style.fontWeight = style.fontWeight || "bold";
