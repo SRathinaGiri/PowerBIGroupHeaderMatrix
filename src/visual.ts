@@ -40,7 +40,7 @@ import ISelectionManager = powerbi.extensibility.ISelectionManager;
 import ISelectionId = powerbi.extensibility.ISelectionId;
 import IVisualEventService = powerbi.extensibility.IVisualEventService;
 
-import { VisualFormattingSettingsModel } from "./settings";
+import { VisualFormattingSettingsModel, MeasureHeaderInfo } from "./settings";
 import IVisualHost = powerbi.extensibility.visual.IVisualHost;
 
 type DataView = powerbi.DataView;
@@ -79,6 +79,8 @@ interface HeaderCell {
     collapsed: boolean;
     /** Set when this header cell identifies exactly one data column that can be sorted. */
     sortKey?: string;
+    /** Set on measure-name cells: index into matrix.valueSources. */
+    measureIndex?: number;
 }
 
 interface HeaderRow {
@@ -160,6 +162,8 @@ export class Visual implements IVisual {
     private activeSortOffset: number | undefined = undefined;
     private formatterCache: Map<string, ReturnType<typeof valueFormatter.create>> = new Map();
     private virtualRowHeight: number = 25;
+    /** Stored "measureHeader" object per valueSource index (only user-set properties). */
+    private measureHeaderStyles: any[] = [];
     private align = {
         rowHeaderH: "left", rowHeaderV: "middle",
         colHeaderH: "center", colHeaderV: "middle",
@@ -432,14 +436,31 @@ export class Visual implements IVisual {
         this.grandTotalPosition = grandTotalPos === "Top" ? "Top" : "Bottom";
         this.rowHeaderMinWidth = this.getObjectValue<number>(dataView?.metadata?.objects, "state", "rowHeaderMinWidth", 160) || 160;
         this.rowHeaderFontSize = this.getObjectValue<number>(dataView?.metadata?.objects, "labels", "rowHeaderFontSize", 12) || 12;
-        this.rowHeaderFontFamily = this.getObjectValue<any>(dataView?.metadata?.objects, "labels", "rowHeaderFontFamily", { value: "" } as any as string) as any as string || this.getObjectValue<string>(dataView?.metadata?.objects, "labels", "rowHeaderFontFamily", "");
+        this.rowHeaderFontFamily = this.readText(dataView?.metadata?.objects, "labels", "rowHeaderFontFamily");
         this.rowHeaderBold = this.getObjectValue<boolean>(dataView?.metadata?.objects, "labels", "rowHeaderBold", false);
         this.colHeaderFontSize = this.getObjectValue<number>(dataView?.metadata?.objects, "labels", "colHeaderFontSize", 11) || 11;
-        this.colHeaderFontFamily = this.getObjectValue<any>(dataView?.metadata?.objects, "labels", "colHeaderFontFamily", { value: "" } as any as string) as any as string || this.getObjectValue<string>(dataView?.metadata?.objects, "labels", "colHeaderFontFamily", "");
+        this.colHeaderFontFamily = this.readText(dataView?.metadata?.objects, "labels", "colHeaderFontFamily");
         this.colHeaderBold = this.getObjectValue<boolean>(dataView?.metadata?.objects, "labels", "colHeaderBold", false);
         this.dataFontSize = this.getObjectValue<number>(dataView?.metadata?.objects, "labels", "dataFontSize", 11) || 11;
-        this.dataFontFamily = this.getObjectValue<any>(dataView?.metadata?.objects, "labels", "dataFontFamily", { value: "" } as any as string) as any as string || this.getObjectValue<string>(dataView?.metadata?.objects, "labels", "dataFontFamily", "");
+        this.dataFontFamily = this.readText(dataView?.metadata?.objects, "labels", "dataFontFamily");
         this.dataBold = this.getObjectValue<boolean>(dataView?.metadata?.objects, "labels", "dataBold", false);
+
+        // Per-measure header styles: one Format pane group per displayed measure
+        this.measureHeaderStyles = [];
+        const headerMeasures: MeasureHeaderInfo[] = [];
+        ((dataView && dataView.matrix && dataView.matrix.valueSources) || []).forEach((vs: any, i: number) => {
+            const stored = (vs.objects && vs.objects.measureHeader) || {};
+            this.measureHeaderStyles[i] = stored;
+            const roles = vs.roles || {};
+            if (roles.measure && vs.queryName) {
+                headerMeasures.push({ queryName: vs.queryName, displayName: vs.displayName || vs.queryName, stored });
+            }
+        });
+        this.formattingSettings.measureHeaderCard.build(headerMeasures, {
+            fontFamily: this.colHeaderFontFamily || "Segoe UI",
+            fontSize: this.colHeaderFontSize || 11,
+            bold: !!this.colHeaderBold
+        }, (v) => this.parseColor(v));
 
         const objs = dataView?.metadata?.objects;
         const hAlign = (prop: string, def: string) => this.pickEnum(this.getObjectValue<any>(objs, "alignment", prop, def), ["left", "center", "right"], def);
@@ -589,7 +610,21 @@ export class Visual implements IVisual {
     }
 
     public getFormattingModel(): powerbi.visuals.FormattingModel {
-        return this.formattingSettingsService.buildFormattingModel(this.formattingSettings);
+        const model = this.formattingSettingsService.buildFormattingModel(this.formattingSettings);
+        // Per-measure groups repeat the same property names; the service only de-duplicates slice
+        // uids within one group, so make them unique across groups (values are saved by selector).
+        const seen = new Set<string>();
+        for (const card of model.cards || []) {
+            for (const group of (card as any).groups || []) {
+                for (const slice of group.slices || []) {
+                    let uid = slice.uid;
+                    for (let n = 1; seen.has(uid); n++) uid = `${slice.uid}-g${n}`;
+                    slice.uid = uid;
+                    seen.add(uid);
+                }
+            }
+        }
+        return model;
     }
 
     public enumerateObjectInstances(options: powerbi.EnumerateVisualObjectInstancesOptions): powerbi.VisualObjectInstanceEnumeration {
@@ -833,6 +868,7 @@ export class Visual implements IVisual {
                 if (ch.underline) txt.style.textDecoration = "underline";
                 if (this.colHeaderColor) th.style.color = this.colHeaderColor;
                 if (this.colHeaderBg) th.style.backgroundColor = this.colHeaderBg;
+                if (cell.measureIndex !== undefined) this.applyMeasureHeaderStyle(th, txt, cell.measureIndex);
                 this.applyGridBorder(th, true);
                 th.appendChild(txt);
                 if (cell.span > 1) th.colSpan = cell.span;
@@ -1742,11 +1778,33 @@ export class Visual implements IVisual {
         return (v !== undefined) ? (v as T) : defaultValue;
     }
 
+    /** Text/enumeration property as a string ("" when unset); tolerates {value} wrappers. */
+    private readText(objects: powerbi.DataViewObjects | undefined, objectName: string, propertyName: string): string {
+        const v: any = this.getObjectValue<any>(objects, objectName, propertyName, "");
+        if (typeof v === "string") return v;
+        return v && typeof v.value === "string" ? v.value : "";
+    }
+
     /** Returns the enumeration value (plain or {value}) when it is one of the allowed values, else the default. */
     private pickEnum(input: any, allowed: string[], def: string): string {
         const v = typeof input === "string" ? input : (input && typeof input.value === "string" ? input.value : "");
         const lower = v.toLowerCase();
         return allowed.indexOf(lower) >= 0 ? lower : def;
+    }
+
+    /** Applies the per-measure header overrides; properties the user never set keep the column-header style. */
+    private applyMeasureHeaderStyle(th: HTMLElement, txt: HTMLElement, measureIndex: number) {
+        const s = this.measureHeaderStyles[measureIndex];
+        if (!s) return;
+        if (s.fontFamily) txt.style.fontFamily = String(s.fontFamily);
+        if (typeof s.fontSize === "number" && s.fontSize > 0) txt.style.fontSize = `${s.fontSize}px`;
+        if (typeof s.bold === "boolean") txt.style.fontWeight = s.bold ? "bold" : "normal";
+        if (typeof s.italic === "boolean") txt.style.fontStyle = s.italic ? "italic" : "normal";
+        if (typeof s.underline === "boolean") txt.style.textDecoration = s.underline ? "underline" : "none";
+        const fore = this.parseColor(s.fontColor);
+        const back = this.parseColor(s.backColor);
+        if (fore) th.style.color = fore;
+        if (back) th.style.backgroundColor = back;
     }
 
     private setAlignment(el: HTMLElement, horizontal: string, vertical: string) {
@@ -2294,7 +2352,9 @@ export class Visual implements IVisual {
                     key,
                     togglable: isGroupLevel && !!label && collapsible.has(key),
                     collapsed: isGroupLevel && this.collapsedColKeys.has(key),
-                    sortKey: (span === 1 && deepestLabel[i] === level) ? col.uniqueKey : undefined
+                    sortKey: (span === 1 && deepestLabel[i] === level) ? col.uniqueKey : undefined,
+                    // Levels below the group levels hold the measure names
+                    measureIndex: (level >= layout.groupDepth && span === 1) ? col.measureIndex : undefined
                 });
                 i = j;
             }

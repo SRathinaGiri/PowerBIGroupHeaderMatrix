@@ -66,6 +66,52 @@ function alignmentGroup(prefix: string, displayName: string, defaultHorizontal: 
     });
 }
 
+export interface MeasureHeaderInfo {
+    queryName: string;
+    displayName: string;
+    /** Raw "measureHeader" object stored on the measure (only properties the user changed). */
+    stored: any;
+}
+
+export interface MeasureHeaderDefaults {
+    fontFamily: string;
+    fontSize: number;
+    bold: boolean;
+}
+
+/** One Format pane group per measure; every slice is bound to that measure by a metadata selector. */
+export class MeasureHeaderCard extends formattingSettings.CompositeCard {
+    name: string = "measureHeader";
+    displayName: string = "Measure headers";
+    groups: Array<formattingSettings.Group> = [];
+
+    public build(measures: MeasureHeaderInfo[], defaults: MeasureHeaderDefaults, colorOf: (v: any) => string) {
+        this.visible = measures.length > 0;
+        this.groups = measures.map((m, i) => {
+            const selector = { metadata: m.queryName };
+            const s = m.stored || {};
+            const color = (v: any) => ({ value: colorOf(v) || "" });
+            return new formattingSettings.Group({
+                name: `measureHeader${i}`,
+                displayName: m.displayName,
+                slices: [
+                    new formattingSettings.FontControl({
+                        name: "font",
+                        displayName: "Font",
+                        fontFamily: new formattingSettings.FontPicker({ name: "fontFamily", value: s.fontFamily || defaults.fontFamily, selector }),
+                        fontSize: new formattingSettings.NumUpDown({ name: "fontSize", value: s.fontSize ?? defaults.fontSize, selector }),
+                        bold: new ToggleSwitch({ name: "bold", value: s.bold ?? defaults.bold, selector }),
+                        italic: new ToggleSwitch({ name: "italic", value: s.italic ?? false, selector }),
+                        underline: new ToggleSwitch({ name: "underline", value: s.underline ?? false, selector })
+                    }),
+                    new ColorPicker({ name: "fontColor", displayName: "Text color", value: color(s.fontColor), selector }),
+                    new ColorPicker({ name: "backColor", displayName: "Background color", value: color(s.backColor), selector })
+                ]
+            });
+        });
+    }
+}
+
 /**
 * visual settings model class
 *
@@ -216,5 +262,7 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
         ];
     }();
 
-    cards = [this.behaviorCard, this.labelsCard, this.alignmentCard, this.colorsCard, this.gridCard, this.zebraCard, this.zebraColsCard, this.subtotalsCard, this.grandTotalCard, this.themeCard];
+    measureHeaderCard = new MeasureHeaderCard();
+
+    cards = [this.behaviorCard, this.labelsCard, this.alignmentCard, this.measureHeaderCard, this.colorsCard, this.gridCard, this.zebraCard, this.zebraColsCard, this.subtotalsCard, this.grandTotalCard, this.themeCard];
 }

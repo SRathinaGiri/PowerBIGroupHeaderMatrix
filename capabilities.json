@@ -293,6 +293,18 @@
                 ] } }
             }
         },
+        "measureHeader": {
+            "displayName": "Measure headers",
+            "properties": {
+                "fontFamily": { "type": { "formatting": { "fontFamily": true } } },
+                "fontSize": { "type": { "formatting": { "fontSize": true } } },
+                "bold": { "type": { "bool": true } },
+                "italic": { "type": { "bool": true } },
+                "underline": { "type": { "bool": true } },
+                "fontColor": { "type": { "fill": { "solid": { "color": true } } } },
+                "backColor": { "type": { "fill": { "solid": { "color": true } } } }
+            }
+        },
         "colors": {
             "displayName": "Colors",
             "properties": {
