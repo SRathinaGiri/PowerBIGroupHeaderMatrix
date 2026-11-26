@@ -272,10 +272,20 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
 
     rowFormattingCard = new class extends FormattingSettingsCard {
         applyToRowHeaders = new ToggleSwitch({ name: "applyToRowHeaders", displayName: "Apply to row headers", value: true });
+        precedenceItems = [
+            { value: "cell", displayName: "Cell formatting wins" },
+            { value: "row", displayName: "Row formatting wins" }
+        ];
+        precedence = new ItemDropdown({
+            name: "precedence",
+            displayName: "When row and cell formatting overlap",
+            items: this.precedenceItems,
+            value: this.precedenceItems[0]
+        });
         name: string = "rowFormatting";
         displayName: string = "Row formatting";
         description: string = "Whole-row styles come from the Row Background Color, Row Font Color and Row Bold field wells";
-        slices: Array<FormattingSettingsSlice> = [this.applyToRowHeaders];
+        slices: Array<FormattingSettingsSlice> = [this.applyToRowHeaders, this.precedence];
     }();
 
     cards = [this.behaviorCard, this.labelsCard, this.alignmentCard, this.measureHeaderCard, this.rowFormattingCard, this.colorsCard, this.gridCard, this.zebraCard, this.zebraColsCard, this.subtotalsCard, this.grandTotalCard, this.themeCard];

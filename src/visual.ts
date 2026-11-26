@@ -150,6 +150,8 @@ export class Visual implements IVisual {
     private rowFontMeasureIndex: number = -1;
     private rowBoldMeasureIndex: number = -1;
     private rowFormatApplyToHeaders: boolean = true;
+    /** True when the row style is applied after (over) the cell conditional style. */
+    private rowFormatWins: boolean = false;
     private measureFontColorSettings: string[] = [];
     private measureBgColorSettings: string[] = [];
     private gridShowHorizontal: boolean = true;
@@ -482,6 +484,7 @@ export class Visual implements IVisual {
         const objs = dataView?.metadata?.objects;
         this.debugFromSetting = this.getObjectValue<boolean>(objs, "state", "showDiagnostics", false) === true;
         this.rowFormatApplyToHeaders = this.getObjectValue<boolean>(objs, "rowFormatting", "applyToRowHeaders", true) !== false;
+        this.rowFormatWins = this.pickEnum(this.getObjectValue<any>(objs, "rowFormatting", "precedence", "cell"), ["cell", "row"], "cell") === "row";
         const hAlign = (prop: string, def: string) => this.pickEnum(this.getObjectValue<any>(objs, "alignment", prop, def), ["left", "center", "right"], def);
         const vAlign = (prop: string) => this.pickEnum(this.getObjectValue<any>(objs, "alignment", prop, "middle"), ["top", "middle", "bottom"], "middle");
         this.align = {
@@ -1187,14 +1190,21 @@ export class Visual implements IVisual {
                 if (!baseBg) baseBg = zebraRowColor;
                 if (!baseBg && this.cellBg) baseBg = this.cellBg;
                 if (baseBg) td.style.backgroundColor = baseBg;
-                // Whole-row style sits on the base styles...
-                if (rowStyle) {
+                // Row and cell conditional styles sit on the base styles; whichever is applied
+                // last wins where both set the same property (Row formatting > precedence).
+                const applyRow = () => {
+                    if (!rowStyle) return;
                     if (rowStyle.bg) td.style.backgroundColor = rowStyle.bg;
                     if (rowStyle.color) td.style.color = rowStyle.color;
                     if (rowStyle.bold) td.style.fontWeight = "bold";
+                };
+                if (this.rowFormatWins) {
+                    this.applyCellConditionalStyle(td, valuesMap, col);
+                    applyRow();
+                } else {
+                    applyRow();
+                    this.applyCellConditionalStyle(td, valuesMap, col);
                 }
-                // ...and individual cell conditional colors win over both
-                this.applyCellConditionalStyle(td, valuesMap, col);
                 this.applyGridBorder(td, false);
 
                 // Interaction (Multi-row mode)

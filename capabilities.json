@@ -319,7 +319,11 @@
         "rowFormatting": {
             "displayName": "Row formatting",
             "properties": {
-                "applyToRowHeaders": { "type": { "bool": true } }
+                "applyToRowHeaders": { "type": { "bool": true } },
+                "precedence": { "type": { "enumeration": [
+                    { "displayName": "Cell formatting wins", "value": "cell" },
+                    { "displayName": "Row formatting wins", "value": "row" }
+                ] } }
             }
         },
         "general": {
