@@ -79,18 +79,52 @@ export interface MeasureHeaderDefaults {
     bold: boolean;
 }
 
+/** A measure in the Cell Font Color / Cell Background Color wells that a column can take its colour from. */
+export interface ColorSourceOption {
+    queryName: string;
+    displayName: string;
+}
+
+/** Stored values of the "Font color from" / "Background from" dropdowns. */
+export const COLOR_SOURCE_AUTO = "auto";
+export const COLOR_SOURCE_NONE = "none";
+
+function colorSourceItems(options: ColorSourceOption[]) {
+    return [
+        { value: COLOR_SOURCE_AUTO, displayName: "Automatic (by position)" },
+        { value: COLOR_SOURCE_NONE, displayName: "None" },
+        ...options.map(o => ({ value: o.queryName, displayName: o.displayName }))
+    ];
+}
+
+function pickItem(items: Array<{ value: string; displayName: string }>, stored: any) {
+    const v = typeof stored === "string" ? stored : (stored && stored.value);
+    return items.find(i => i.value === v) || items[0];
+}
+
 /** One Format pane group per measure; every slice is bound to that measure by a metadata selector. */
 export class MeasureHeaderCard extends formattingSettings.CompositeCard {
     name: string = "measureHeader";
     displayName: string = "Measure columns";
     groups: Array<formattingSettings.Group> = [];
 
-    public build(measures: MeasureHeaderInfo[], defaults: MeasureHeaderDefaults, colorOf: (v: any) => string) {
+    public build(measures: MeasureHeaderInfo[], defaults: MeasureHeaderDefaults, colorOf: (v: any) => string,
+                 fontSources: ColorSourceOption[] = [], backSources: ColorSourceOption[] = []) {
         this.visible = measures.length > 0;
+        const fontItems = colorSourceItems(fontSources);
+        const backItems = colorSourceItems(backSources);
         this.groups = measures.map((m, i) => {
             const selector = { metadata: m.queryName };
             const s = m.stored || {};
             const color = (v: any) => ({ value: colorOf(v) || "" });
+            // Which conditional-colour measure colours this column's cells (Automatic = pair by position)
+            const sourceSlices: FormattingSettingsSlice[] = [];
+            if (fontSources.length) {
+                sourceSlices.push(new ItemDropdown({ name: "fontColorSource", displayName: "Cell font color from", items: fontItems, value: pickItem(fontItems, s.fontColorSource), selector }));
+            }
+            if (backSources.length) {
+                sourceSlices.push(new ItemDropdown({ name: "backColorSource", displayName: "Cell background from", items: backItems, value: pickItem(backItems, s.backColorSource), selector }));
+            }
             return new formattingSettings.Group({
                 name: `measureHeader${i}`,
                 displayName: m.displayName,
@@ -104,15 +138,16 @@ export class MeasureHeaderCard extends formattingSettings.CompositeCard {
                         italic: new ToggleSwitch({ name: "italic", value: s.italic ?? false, selector }),
                         underline: new ToggleSwitch({ name: "underline", value: s.underline ?? false, selector })
                     }),
-                    new ColorPicker({ name: "fontColor", displayName: "Text color", value: color(s.fontColor), selector }),
-                    new ColorPicker({ name: "backColor", displayName: "Background color", value: color(s.backColor), selector }),
+                    new ColorPicker({ name: "fontColor", displayName: "Header text color", value: color(s.fontColor), selector }),
+                    new ColorPicker({ name: "backColor", displayName: "Header background", value: color(s.backColor), selector }),
                     new formattingSettings.NumUpDown({ name: "separatorWidth", displayName: "Separator after column: width (px)", value: s.separatorWidth ?? 0, selector }),
                     new ColorPicker({
                         name: "separatorColor",
                         displayName: "Separator after column: color",
                         value: { value: colorOf(s.separatorColor) || "#ffffff" },
                         selector
-                    })
+                    }),
+                    ...sourceSlices
                 ]
             });
         });

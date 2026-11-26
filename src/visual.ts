@@ -38,7 +38,7 @@ import ISelectionManager = powerbi.extensibility.ISelectionManager;
 import ISelectionId = powerbi.extensibility.ISelectionId;
 import IVisualEventService = powerbi.extensibility.IVisualEventService;
 
-import { VisualFormattingSettingsModel, MeasureHeaderInfo } from "./settings";
+import { VisualFormattingSettingsModel, MeasureHeaderInfo, ColorSourceOption, COLOR_SOURCE_AUTO, COLOR_SOURCE_NONE } from "./settings";
 import IVisualHost = powerbi.extensibility.visual.IVisualHost;
 
 type DataView = powerbi.DataView;
@@ -478,19 +478,22 @@ export class Visual implements IVisual {
         // Per-measure header styles: one Format pane group per displayed measure
         this.measureHeaderStyles = [];
         const headerMeasures: MeasureHeaderInfo[] = [];
+        const fontSources: ColorSourceOption[] = [];
+        const backSources: ColorSourceOption[] = [];
         ((dataView && dataView.matrix && dataView.matrix.valueSources) || []).forEach((vs: any, i: number) => {
             const stored = (vs.objects && vs.objects.measureHeader) || {};
             this.measureHeaderStyles[i] = stored;
             const roles = vs.roles || {};
-            if (roles.measure && vs.queryName) {
-                headerMeasures.push({ queryName: vs.queryName, displayName: vs.displayName || vs.queryName, stored });
-            }
+            const option = { queryName: vs.queryName, displayName: vs.displayName || vs.queryName };
+            if (roles.measure && vs.queryName) headerMeasures.push({ ...option, stored });
+            if (roles.cellFontColor && vs.queryName) fontSources.push(option);
+            if (roles.cellBgColor && vs.queryName) backSources.push(option);
         });
         this.formattingSettings.measureHeaderCard.build(headerMeasures, {
             fontFamily: this.colHeaderFontFamily || "Segoe UI",
             fontSize: this.colHeaderFontSize || 11,
             bold: !!this.colHeaderBold
-        }, (v) => this.parseColor(v));
+        }, (v) => this.parseColor(v), fontSources, backSources);
 
         const objs = dataView?.metadata?.objects;
         this.debugFromSetting = this.getObjectValue<boolean>(objs, "state", "showDiagnostics", false) === true;
@@ -2061,6 +2064,14 @@ export class Visual implements IVisual {
         }
     }
 
+    /** "Cell font color from" / "Cell background from" choice of a measure column (auto when unset). */
+    private readSourceChoice(measureIndex: number, prop: string): string {
+        const s = this.measureHeaderStyles[measureIndex];
+        const v = s && s[prop];
+        const text = typeof v === "string" ? v : (v && typeof v.value === "string" ? v.value : "");
+        return text || COLOR_SOURCE_AUTO;
+    }
+
     /** Cell padding from Format > Grid (defaults match the stylesheet: 4px / 6px). */
     private applyPadding(el: HTMLElement) {
         el.style.padding = `${this.padV}px ${this.padH}px`;
@@ -2134,14 +2145,23 @@ export class Visual implements IVisual {
 
         // Measure-driven colors (per value)
         const tryMeasureColor = (mi: number): string | null => this.getColorMeasureValue(valuesMap, col, mi);
-        const selectColorIndex = (arr: number[]): number => {
+        // Which colour measure applies: the column's "Cell ... from" choice, else pairing by position
+        // (Nth colour measure for the Nth value; extra values use the last colour measure).
+        const selectColorIndex = (arr: number[], sourceProp: string): number => {
             if (!arr.length) return -1;
+            const chosen = this.readSourceChoice(measureIndex, sourceProp);
+            if (chosen === COLOR_SOURCE_NONE) return -1;
+            if (chosen !== COLOR_SOURCE_AUTO) {
+                const vsArr = (this.lastMatrix && this.lastMatrix.valueSources) || [];
+                const match = arr.find(i => vsArr[i] && vsArr[i].queryName === chosen);
+                if (match !== undefined) return match;
+            }
             const displayPos = this.displayMeasureIndices.indexOf(measureIndex);
             if (displayPos >= 0 && displayPos < arr.length) return arr[displayPos];
             return arr[arr.length - 1];
         };
-        const measureBg = tryMeasureColor(selectColorIndex(this.cellBgColorMeasureIndices));
-        const measureFont = tryMeasureColor(selectColorIndex(this.cellFontColorMeasureIndices));
+        const measureBg = tryMeasureColor(selectColorIndex(this.cellBgColorMeasureIndices, "backColorSource"));
+        const measureFont = tryMeasureColor(selectColorIndex(this.cellFontColorMeasureIndices, "fontColorSource"));
         const measureDefaultFont = this.measureFontColorSettings[measureIndex] || "";
         const measureDefaultBg = this.measureBgColorSettings[measureIndex] || "";
 

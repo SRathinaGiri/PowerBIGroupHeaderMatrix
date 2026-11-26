@@ -347,7 +347,9 @@
                 "fontColor": { "type": { "fill": { "solid": { "color": true } } } },
                 "backColor": { "type": { "fill": { "solid": { "color": true } } } },
                 "separatorWidth": { "type": { "numeric": true } },
-                "separatorColor": { "type": { "fill": { "solid": { "color": true } } } }
+                "separatorColor": { "type": { "fill": { "solid": { "color": true } } } },
+                "fontColorSource": { "type": { "enumeration": [] } },
+                "backColorSource": { "type": { "enumeration": [] } }
             }
         },
         "colors": {

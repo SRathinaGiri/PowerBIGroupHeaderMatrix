@@ -84,14 +84,44 @@ def slicer(entity: str, col: str, x: float, width: float, z: int, selected=None,
 
 
 ROW_LEVELS = [level("PL Lines", "P&L", "Line"), level("PL Lines", "P&L", "Detail"), level("PL Lines", "P&L", "GL Code")]
+FONT_RULES = ["Style Font vs Plan", "Style Font vs LY", "Style Font YTD vs Plan", "Style Font YTD vs LY"]
 STYLE_ROLES = {
     "rowBgColor": {"projections": [measure("Style Row Fill")]},
     "rowBold": {"projections": [measure("Style Row Bold")]},
-    # Pairs by position with Values: 1st -> none, 2nd (Plan) -> yellow, the rest -> none
-    "cellBgColor": {"projections": [measure("Style Fill None"), measure("Style Fill Plan"), measure("Style Fill None 2")]},
-    "cellFontColor": {"projections": [measure("Style Font Below Plan")]},
+    "cellBgColor": {"projections": [measure("Style Fill Plan")]},
+    "cellFontColor": {"projections": [measure(m) for m in FONT_RULES]},
 }
 DEFAULT_OBJECTS = {"rowFormatting": [{"properties": {"applyToRowHeaders": lit("true")}}]}
+
+# Which colour measure each Values column takes (Format > Measure columns > Cell ... from).
+# Like the MIS layout: only the comparison columns are coloured; Plan keeps its fill.
+COLOR_SOURCES = {
+    "Plan": {"backColorSource": "Style Fill Plan"},
+    "vs Plan %": {"fontColorSource": "Style Font vs Plan"},
+    "vs LY %": {"fontColorSource": "Style Font vs LY"},
+    "YTD vs Plan %": {"fontColorSource": "Style Font YTD vs Plan"},
+    "YTD vs LY %": {"fontColorSource": "Style Font YTD vs LY"},
+}
+
+
+def with_color_sources(objects: dict, values: list) -> dict:
+    """Sets fontColorSource/backColorSource for every Values measure ('none' unless mapped),
+    merged into existing per-measure measureHeader entries so other formatting is kept."""
+    objects = json.loads(json.dumps(objects or {}))
+    entries = objects.setdefault("measureHeader", [])
+    for name in values:
+        mapped = COLOR_SOURCES.get(name, {})
+        props = {
+            "fontColorSource": lit(f"'{FACT}.{mapped['fontColorSource']}'" if "fontColorSource" in mapped else "'none'"),
+            "backColorSource": lit(f"'{FACT}.{mapped['backColorSource']}'" if "backColorSource" in mapped else "'none'"),
+        }
+        selector = {"metadata": f"{FACT}.{name}"}
+        entry = next((e for e in entries if e.get("selector") == selector), None)
+        if entry is None:
+            entries.append({"properties": props, "selector": selector})
+        else:
+            entry.setdefault("properties", {}).update(props)
+    return objects
 
 
 def matrix(query_state: dict, objects: dict, z: int) -> dict:
@@ -152,7 +182,7 @@ test_page = add_page("P&L Test", [
     slicer("PL Property", "Region", 364, 180, 300),
     slicer("PL Property", "Property", 552, 260, 400),
     matrix({"row": {"projections": ROW_LEVELS}, "measure": {"projections": [measure(v) for v in test_values]}, **STYLE_ROLES},
-           kept_test or DEFAULT_OBJECTS, 1000),
+           with_color_sources(kept_test or DEFAULT_OBJECTS, test_values), 1000),
 ])
 
 # Page 2: P&L by Property (Region > Property across, three measures each)
@@ -166,7 +196,7 @@ add_page("P&L by Property", [
         "columns": {"projections": [level("PL Property", "Location", "Region"), level("PL Property", "Location", "Property")]},
         "measure": {"projections": [measure(v) for v in prop_values]},
         **STYLE_ROLES,
-    }, kept_prop or DEFAULT_OBJECTS, 1000),
+    }, with_color_sources(kept_prop or DEFAULT_OBJECTS, prop_values), 1000),
 ])
 
 pages_meta["activePageName"] = test_page
