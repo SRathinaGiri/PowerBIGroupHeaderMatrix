@@ -93,6 +93,14 @@ interface ColumnLayout {
     /** Number of header levels (group levels plus the measure-name level when shown). */
     depth: number;
     groupDepth: number;
+    /** valueSource index -> every values-map offset of that measure, grand-total column first. */
+    measureOffsets: Map<number, number[]>;
+}
+
+interface RowStyle {
+    bg: string;
+    color: string;
+    bold: boolean;
 }
 
 interface SortState {
@@ -133,6 +141,12 @@ export class Visual implements IVisual {
     private displayMeasureIndices: number[] = [];
     private cellBgColorMeasureIndices: number[] = [];
     private cellFontColorMeasureIndices: number[] = [];
+    /** Measures that are never displayed: they only style cells or rows. */
+    private static readonly STYLE_ROLES = ["cellBgColor", "cellFontColor", "rowBgColor", "rowFontColor", "rowBold"];
+    private rowBgMeasureIndex: number = -1;
+    private rowFontMeasureIndex: number = -1;
+    private rowBoldMeasureIndex: number = -1;
+    private rowFormatApplyToHeaders: boolean = true;
     private measureFontColorSettings: string[] = [];
     private measureBgColorSettings: string[] = [];
     private gridShowHorizontal: boolean = true;
@@ -463,6 +477,7 @@ export class Visual implements IVisual {
         }, (v) => this.parseColor(v));
 
         const objs = dataView?.metadata?.objects;
+        this.rowFormatApplyToHeaders = this.getObjectValue<boolean>(objs, "rowFormatting", "applyToRowHeaders", true) !== false;
         const hAlign = (prop: string, def: string) => this.pickEnum(this.getObjectValue<any>(objs, "alignment", prop, def), ["left", "center", "right"], def);
         const vAlign = (prop: string) => this.pickEnum(this.getObjectValue<any>(objs, "alignment", prop, "middle"), ["top", "middle", "bottom"], "middle");
         this.align = {
@@ -686,6 +701,7 @@ export class Visual implements IVisual {
             "Add one or more fields to Columns.",
             "Add one or more measures to Values.",
             "Optional: add measures that return color strings to Cell Background Color or Cell Font Color.",
+            "Optional: style whole rows with Row Background Color, Row Font Color and Row Bold measures (cell colors are applied on top).",
             "Use the visual toolbar to expand, collapse, switch compact layout, and enable pagination or virtualization."
         ].forEach(stepText => {
             const li = document.createElement("li");
@@ -741,6 +757,9 @@ export class Visual implements IVisual {
         this.displayMeasureIndices = [];
         this.cellBgColorMeasureIndices = [];
         this.cellFontColorMeasureIndices = [];
+        this.rowBgMeasureIndex = -1;
+        this.rowFontMeasureIndex = -1;
+        this.rowBoldMeasureIndex = -1;
         this.measureFontColorSettings = [];
         this.measureBgColorSettings = [];
         const vsArr = matrix.valueSources || [];
@@ -749,6 +768,9 @@ export class Visual implements IVisual {
             if (roles.measure) this.displayMeasureIndices.push(i);
             if (roles.cellBgColor) this.cellBgColorMeasureIndices.push(i);
             if (roles.cellFontColor) this.cellFontColorMeasureIndices.push(i);
+            if (roles.rowBgColor && this.rowBgMeasureIndex < 0) this.rowBgMeasureIndex = i;
+            if (roles.rowFontColor && this.rowFontMeasureIndex < 0) this.rowFontMeasureIndex = i;
+            if (roles.rowBold && this.rowBoldMeasureIndex < 0) this.rowBoldMeasureIndex = i;
             const objects = (vsArr[i] as any).objects || {};
             this.measureFontColorSettings[i] = this.parseColor(objects.measureColors && (objects.measureColors as any).cellFontColor) || "";
             this.measureBgColorSettings[i] = this.parseColor(objects.measureColors && (objects.measureColors as any).cellBgColor) || "";
@@ -759,9 +781,11 @@ export class Visual implements IVisual {
                 .map((_, idx) => idx)
                 .filter(idx => {
                     const roles: any = (vsArr[idx] as any).roles || {};
-                    return roles.measure || (!roles.cellBgColor && !roles.cellFontColor);
+                    return roles.measure || !Visual.STYLE_ROLES.some(r => roles[r]);
                 });
-            if (!this.displayMeasureIndices.length) {
+            // Only when the host sent no role information at all: show everything
+            const anyRoles = vsArr.some(vs => Object.keys((vs as any).roles || {}).length > 0);
+            if (!this.displayMeasureIndices.length && !anyRoles) {
                 this.displayMeasureIndices = vsArr.map((_, idx) => idx);
             }
         }
@@ -997,6 +1021,7 @@ export class Visual implements IVisual {
 
              rowInfo.labelsToUse = labelsToUse;
              rowInfo.rowMeasureBg = rowMeasureBg;
+             rowInfo.rowStyle = this.getRowStyle(valuesMapForRow as ValuesMap, layout);
              if (!rowInfo.isTotal) {
                  rowInfo.bodyRowIndex = bodyRowIndex;
                  bodyRowIndex++;
@@ -1014,11 +1039,12 @@ export class Visual implements IVisual {
             for (const rowInfo of rowsToRenderSlice) {
                 const labelsToUse = rowInfo.labelsToUse;
                 const rowMeasureBg = rowInfo.rowMeasureBg;
+                const rowStyle: RowStyle | null = rowInfo.rowStyle;
 
                 const tr = document.createElement("tr");
                 if (rowInfo.isTotal) tr.className = "ghm-totalrow";
                 let zebraRowColor = "";
-                if (this.zebraEnabled && !rowInfo.isTotal && !rowMeasureBg) {
+                if (this.zebraEnabled && !rowInfo.isTotal && !rowMeasureBg && !(rowStyle && rowStyle.bg)) {
                     zebraRowColor = (rowInfo.bodyRowIndex % 2 === 0) ? this.zebraEvenColor : this.zebraOddColor;
                     if (zebraRowColor) tr.style.backgroundColor = zebraRowColor;
                 }
@@ -1029,8 +1055,10 @@ export class Visual implements IVisual {
                     rowSelectionId = this.createSelectionId(rowInfo.node);
                     rowIsSelected = currentSelection.some(id => this.selectionIdsMatch(id, rowSelectionId!));
                 }
-            const rowStyleBg = rowMeasureBg || this.rowHeaderBg || "";
-            const rowStyleColor = this.rowHeaderColor || "";
+            // Row header: base colors, then the measure colors, then the whole-row style (if enabled)
+            const headerRowStyle = (this.rowFormatApplyToHeaders && rowStyle) ? rowStyle : null;
+            const rowStyleBg = (headerRowStyle && headerRowStyle.bg) || rowMeasureBg || this.rowHeaderBg || "";
+            const rowStyleColor = (headerRowStyle && headerRowStyle.color) || this.rowHeaderColor || "";
 
             if (rowHeaderCols > 0) {
                 if (this.compactLayout) {
@@ -1043,6 +1071,7 @@ export class Visual implements IVisual {
                     this.applyRowHeaderStyle(th, 0);
                     if (rowStyleBg) th.style.backgroundColor = rowStyleBg;
                     if (rowStyleColor) th.style.color = rowStyleColor;
+                    if (headerRowStyle && headerRowStyle.bold) th.style.fontWeight = "bold";
                     this.applyGridBorder(th, true);
                     const depthIndent = (rowInfo as any).isTotal && (rowInfo as any).depth !== undefined
                         ? Math.max(0, Math.min(rowDepth - 1, (rowInfo as any).depth))
@@ -1098,6 +1127,7 @@ export class Visual implements IVisual {
                         this.applyRowHeaderStyle(th, lvl);
                         if (rowStyleBg) th.style.backgroundColor = rowStyleBg;
                         if (rowStyleColor) th.style.color = rowStyleColor;
+                        if (headerRowStyle && headerRowStyle.bold) th.style.fontWeight = "bold";
                         this.applyGridBorder(th, true);
 
                         const toggleKeyAtLevel = (rowInfo as any).toggles ? (rowInfo as any).toggles[lvl] : ((rowInfo as any).toggleKey && lvl === toggleLevel ? (rowInfo as any).toggleKey : null);
@@ -1141,7 +1171,7 @@ export class Visual implements IVisual {
                 const td = document.createElement("td");
                 this.setAlignment(td, this.align.valuesH, this.align.valuesV);
                 const v = this.getCellValue(valuesMap, col);
-                td.textContent = this.formatValueByMeasure(v, globalM);
+                td.textContent = this.formatValueByMeasure(v, globalM, this.getCellFormat(valuesMap, col));
                 if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
                 if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
                 if (this.dataBold) td.style.fontWeight = "bold";
@@ -1152,7 +1182,13 @@ export class Visual implements IVisual {
                 if (!baseBg) baseBg = zebraRowColor;
                 if (!baseBg && this.cellBg) baseBg = this.cellBg;
                 if (baseBg) td.style.backgroundColor = baseBg;
-                // Conditional colors win over the base styles
+                // Whole-row style sits on the base styles...
+                if (rowStyle) {
+                    if (rowStyle.bg) td.style.backgroundColor = rowStyle.bg;
+                    if (rowStyle.color) td.style.color = rowStyle.color;
+                    if (rowStyle.bold) td.style.fontWeight = "bold";
+                }
+                // ...and individual cell conditional colors win over both
                 this.applyCellConditionalStyle(td, valuesMap, col);
                 this.applyGridBorder(td, false);
 
@@ -1465,7 +1501,15 @@ export class Visual implements IVisual {
                 colorOffsets: (leaf.subtotalOf !== null ? subtotalOffsets.get(leaf.subtotalOf) : groupOffsets.get(baseKey)) || new Map()
             });
         }
-        return { displayCols: result, depth, groupDepth };
+        // Row-level style measures are read per row: the grand-total column first (pure row
+        // context), then any other column that has a value.
+        const measureOffsets = new Map<number, number[]>();
+        const ordered = [...leaves.filter(l => l.subtotalOf === ""), ...leaves.filter(l => l.subtotalOf !== "")];
+        for (const leaf of ordered) {
+            if (!measureOffsets.has(leaf.measureIndex)) measureOffsets.set(leaf.measureIndex, []);
+            measureOffsets.get(leaf.measureIndex)!.push(leaf.offset);
+        }
+        return { displayCols: result, depth, groupDepth, measureOffsets };
     }
 
     /**
@@ -1557,7 +1601,8 @@ export class Visual implements IVisual {
         if (firstRow && firstRow.values) {
             out.push("first row values: " + Object.keys(firstRow.values).slice(0, 40).map(k => {
                 const c = (firstRow.values as any)[k];
-                return `${k}=${c && c.value}${c && c.valueSourceIndex !== undefined ? "@" + c.valueSourceIndex : ""}`;
+                const fmt = c && c.objects && c.objects.general && c.objects.general.formatString;
+                return `${k}=${c && c.value}${c && c.valueSourceIndex !== undefined ? "@" + c.valueSourceIndex : ""}${fmt ? ` [${fmt}]` : ""}`;
             }).join(" "));
         }
         return out.join("\n");
@@ -1870,9 +1915,30 @@ export class Visual implements IVisual {
         if (!measureBg && !bg && measureDefaultBg) (td as any).style.backgroundColor = measureDefaultBg;
     }
 
+    /** Whole-row style from the Row Background Color / Row Font Color / Row Bold measures. */
+    private getRowStyle(valuesMap: ValuesMap, layout: ColumnLayout): RowStyle | null {
+        const first = (mi: number): any => {
+            if (mi < 0) return null;
+            for (const off of layout.measureOffsets.get(mi) || []) {
+                const c = valuesMap[off];
+                if (c && c.value != null && c.value !== "") return c.value;
+            }
+            return null;
+        };
+        const bg = first(this.rowBgMeasureIndex);
+        const color = first(this.rowFontMeasureIndex);
+        const boldRaw = first(this.rowBoldMeasureIndex);
+        const bold = boldRaw === true || (typeof boldRaw === "number" && boldRaw !== 0)
+            || (typeof boldRaw === "string" && ["1", "true", "yes", "bold"].indexOf(boldRaw.trim().toLowerCase()) >= 0);
+        if (bg == null && color == null && !bold) return null;
+        return { bg: bg != null ? String(bg) : "", color: color != null ? String(color) : "", bold };
+    }
+
     /** Row header background taken from the first non-empty Cell Background Color value of the row. */
     private getRowMeasureBg(valuesMap: ValuesMap, displayCols: DisplayCol[]): string | null {
         if (!this.cellBgColorMeasureIndices.length) return null;
+        // Legacy behaviour; once the Row formatting wells are used, they alone style the row header
+        if (this.rowBgMeasureIndex >= 0 || this.rowFontMeasureIndex >= 0 || this.rowBoldMeasureIndex >= 0) return null;
         const bgIndex = this.cellBgColorMeasureIndices[0];
         for (const col of displayCols) {
             const v = this.getColorMeasureValue(valuesMap, col, bgIndex);
@@ -2313,6 +2379,21 @@ export class Visual implements IVisual {
             .map(x => x.n);
     }
 
+    /** Number inside formatted text (currency, separators, %, parentheses for negatives), or null. */
+    private parseFormattedNumber(v: any): number | null {
+        if (typeof v === "number") return v;
+        if (typeof v !== "string") return null;
+        let s = v.trim();
+        // Text with letters ("Q1 2024", "N/A") is a label, not a number
+        if (!s || /\p{L}/u.test(s)) return null;
+        let negative = false;
+        if (/^\(.*\)$/.test(s)) { negative = true; s = s.slice(1, -1); }
+        s = s.replace(/[^\d.\-+]/g, "");
+        if (!/^[-+]?(\d+\.?\d*|\.\d+)$/.test(s)) return null;
+        const n = parseFloat(s);
+        return Number.isFinite(n) ? (negative ? -n : n) : null;
+    }
+
     /** Typed comparison; blanks always sort last. */
     private compareSortValues(a: any, b: any, dir: number): number {
         const aBlank = a == null || a === "";
@@ -2321,6 +2402,10 @@ export class Visual implements IVisual {
         if (a instanceof Date && b instanceof Date) return (a.getTime() - b.getTime()) * dir;
         if (typeof a === "number" && typeof b === "number") return (a - b) * dir;
         if (typeof a === "boolean" && typeof b === "boolean") return (Number(a) - Number(b)) * dir;
+        // Pre-formatted text such as "1,021.69", "(1,805.80)", "-22.7%" or "₹4,326" sorts by its number
+        const na = this.parseFormattedNumber(a);
+        const nb = this.parseFormattedNumber(b);
+        if (na !== null && nb !== null) return (na - nb) * dir;
         return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" }) * dir;
     }
 
@@ -2395,9 +2480,23 @@ export class Visual implements IVisual {
         return f;
     }
 
-    private formatValueByMeasure(v: any, measureIndex: number): string {
+    /**
+     * Dynamic format string the host attached to this cell's value (measures with a dynamic
+     * format string, calculation groups). Requires general.formatString in capabilities.
+     */
+    private getCellFormat(valuesMap: ValuesMap | undefined, col: DisplayCol | undefined): string | undefined {
+        if (!valuesMap || !col || col.offset === undefined) return undefined;
+        const cell: any = valuesMap[col.offset];
+        const fmt = cell && cell.objects && cell.objects.general && cell.objects.general.formatString;
+        return typeof fmt === "string" && fmt ? fmt : undefined;
+    }
+
+    /** Formats with the value's own dynamic format when present, else the measure's format string. */
+    private formatValueByMeasure(v: any, measureIndex: number, cellFormat?: string): string {
         if (v == null || v === "") return "";
-        const fmt = (this.measureFormats && this.measureFormats[measureIndex]) ? this.measureFormats[measureIndex] : undefined;
+        // Measures that return text (e.g. FORMAT(...)) are already formatted: show them as-is
+        if (typeof v === "string") return v;
+        const fmt = cellFormat || ((this.measureFormats && this.measureFormats[measureIndex]) ? this.measureFormats[measureIndex] : undefined);
         try {
             return this.getFormatter(fmt).format(v);
         } catch { return String(v); }
@@ -2464,7 +2563,7 @@ export class Visual implements IVisual {
         if (this.lastMatrix && this.lastMatrix.valueSources && this.lastMatrix.valueSources[measureIndex]) {
             res.push({
                 displayName: this.lastMatrix.valueSources[measureIndex].displayName,
-                value: this.formatValueByMeasure(value, measureIndex)
+                value: this.formatValueByMeasure(value, measureIndex, this.getCellFormat(rowInfo && rowInfo.valuesMap, displayCol))
             });
         } else {
              res.push({

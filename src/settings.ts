@@ -264,5 +264,13 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
 
     measureHeaderCard = new MeasureHeaderCard();
 
-    cards = [this.behaviorCard, this.labelsCard, this.alignmentCard, this.measureHeaderCard, this.colorsCard, this.gridCard, this.zebraCard, this.zebraColsCard, this.subtotalsCard, this.grandTotalCard, this.themeCard];
+    rowFormattingCard = new class extends FormattingSettingsCard {
+        applyToRowHeaders = new ToggleSwitch({ name: "applyToRowHeaders", displayName: "Apply to row headers", value: true });
+        name: string = "rowFormatting";
+        displayName: string = "Row formatting";
+        description: string = "Whole-row styles come from the Row Background Color, Row Font Color and Row Bold field wells";
+        slices: Array<FormattingSettingsSlice> = [this.applyToRowHeaders];
+    }();
+
+    cards = [this.behaviorCard, this.labelsCard, this.alignmentCard, this.measureHeaderCard, this.rowFormattingCard, this.colorsCard, this.gridCard, this.zebraCard, this.zebraColsCard, this.subtotalsCard, this.grandTotalCard, this.themeCard];
 }

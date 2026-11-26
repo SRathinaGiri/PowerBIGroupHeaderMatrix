@@ -24,6 +24,24 @@
             "displayName": "Cell Font Color",
             "name": "cellFontColor",
             "kind": "Measure"
+        },
+        {
+            "displayName": "Row Background Color",
+            "name": "rowBgColor",
+            "kind": "Measure",
+            "description": "Measure returning a color (e.g. \"#BDD7EE\") applied to the whole row"
+        },
+        {
+            "displayName": "Row Font Color",
+            "name": "rowFontColor",
+            "kind": "Measure",
+            "description": "Measure returning a text color applied to the whole row"
+        },
+        {
+            "displayName": "Row Bold",
+            "name": "rowBold",
+            "kind": "Measure",
+            "description": "Measure returning 1/TRUE/\"bold\" to make the whole row bold"
         }
     ],
     "objects": {
@@ -291,6 +309,17 @@
                     { "displayName": "Middle", "value": "middle" },
                     { "displayName": "Bottom", "value": "bottom" }
                 ] } }
+            }
+        },
+        "rowFormatting": {
+            "displayName": "Row formatting",
+            "properties": {
+                "applyToRowHeaders": { "type": { "bool": true } }
+            }
+        },
+        "general": {
+            "properties": {
+                "formatString": { "type": { "formatting": { "formatString": true } } }
             }
         },
         "measureHeader": {
@@ -632,7 +661,10 @@
                             "for": {
                                 "in": "cellFontColor"
                             }
-                        }
+                        },
+                        { "for": { "in": "rowBgColor" } },
+                        { "for": { "in": "rowFontColor" } },
+                        { "for": { "in": "rowBold" } }
                     ]
                 }
             }
