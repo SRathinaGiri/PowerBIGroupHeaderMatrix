@@ -188,6 +188,21 @@ RETURN
     CALCULATE([{m}], REMOVEFILTERS('PL Calendar'), 'PL Calendar'[Year] = Yr, 'PL Calendar'[Month No] <= LastNo)'''
 
 
+# Amounts are signed (costs negative), so Actual >= Plan is better for revenue, profit and costs alike.
+# Ratios: higher margins are better; a higher staff-cost share is worse.
+FONT_VS_PLAN = r'''
+VAR A = [Actual]
+VAR P = [Plan]
+VAR Better =
+    SWITCH(
+        TRUE(),
+        SELECTEDVALUE('PL Lines'[Line]) = "Staff Cost % of Revenue", A <= P,
+        A >= P
+    )
+RETURN
+    IF(NOT ISBLANK(A) && NOT ISBLANK(P), IF(Better, "#1E7B34", "#C00000"))'''
+
+
 def achievement(a, p):
     return f"IF({IS_RATIO}, [{a}] - [{p}], DIVIDE([{a}], [{p}]))"
 
@@ -220,10 +235,8 @@ MEASURES = [
     ("Style Fill None", "BLANK()", None, None, "P&L\\Styles", False),
     ("Style Fill None 2", "BLANK()", None, None, "P&L\\Styles", False),
     ("Style Fill Plan", "\"#FFF2CC\"", None, None, "P&L\\Styles", False),
-    # Red when a line is worse than plan. Amounts are signed (costs negative), so revenue below
-    # plan and costs over plan are both Actual < Plan.
-    ("Style Font Below Plan", f"IF(NOT {IS_RATIO} && NOT ISBLANK([Plan]) && NOT ISBLANK([Actual]) && [Actual] < [Plan], \"#C00000\")",
-     None, None, "P&L\\Styles", False),
+    # Green when a line is better than plan, red when worse (name kept for existing report bindings)
+    ("Style Font Below Plan", FONT_VS_PLAN, None, None, "P&L\\Styles", False),
 ]
 
 NEW_TABLES = ["PL Fact", "PL Lines", "PL Property", "PL Calendar"]
