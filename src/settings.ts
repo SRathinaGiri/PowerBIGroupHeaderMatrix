@@ -82,7 +82,7 @@ export interface MeasureHeaderDefaults {
 /** One Format pane group per measure; every slice is bound to that measure by a metadata selector. */
 export class MeasureHeaderCard extends formattingSettings.CompositeCard {
     name: string = "measureHeader";
-    displayName: string = "Measure headers";
+    displayName: string = "Measure columns";
     groups: Array<formattingSettings.Group> = [];
 
     public build(measures: MeasureHeaderInfo[], defaults: MeasureHeaderDefaults, colorOf: (v: any) => string) {
@@ -105,7 +105,14 @@ export class MeasureHeaderCard extends formattingSettings.CompositeCard {
                         underline: new ToggleSwitch({ name: "underline", value: s.underline ?? false, selector })
                     }),
                     new ColorPicker({ name: "fontColor", displayName: "Text color", value: color(s.fontColor), selector }),
-                    new ColorPicker({ name: "backColor", displayName: "Background color", value: color(s.backColor), selector })
+                    new ColorPicker({ name: "backColor", displayName: "Background color", value: color(s.backColor), selector }),
+                    new formattingSettings.NumUpDown({ name: "separatorWidth", displayName: "Separator after column: width (px)", value: s.separatorWidth ?? 0, selector }),
+                    new ColorPicker({
+                        name: "separatorColor",
+                        displayName: "Separator after column: color",
+                        value: { value: colorOf(s.separatorColor) || "#ffffff" },
+                        selector
+                    })
                 ]
             });
         });
@@ -216,9 +223,14 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
         showVertical = new ToggleSwitch({ name: "showVertical", displayName: "Vertical grid", value: true });
         thickness = new formattingSettings.NumUpDown({ name: "thickness", displayName: "Grid thickness (px)", value: 1 });
         color = new ColorPicker({ name: "color", displayName: "Grid color", value: { value: "#d0d0d0" } });
+        paddingVertical = new formattingSettings.NumUpDown({ name: "paddingVertical", displayName: "Cell padding: top/bottom (px)", value: 4 });
+        paddingHorizontal = new formattingSettings.NumUpDown({ name: "paddingHorizontal", displayName: "Cell padding: left/right (px)", value: 6 });
+        headerRowHeight = new formattingSettings.NumUpDown({ name: "headerRowHeight", displayName: "Header row height (px, 0 = auto)", value: 0 });
+        rowHeight = new formattingSettings.NumUpDown({ name: "rowHeight", displayName: "Row height (px, 0 = auto)", value: 0 });
         name: string = "grid";
         displayName: string = "Grid";
-        slices: Array<FormattingSettingsSlice> = [this.showHorizontal, this.showVertical, this.thickness, this.color];
+        slices: Array<FormattingSettingsSlice> = [this.showHorizontal, this.showVertical, this.thickness, this.color,
+            this.paddingVertical, this.paddingHorizontal, this.headerRowHeight, this.rowHeight];
     }();
 
     zebraCard = new class extends FormattingSettingsCard {

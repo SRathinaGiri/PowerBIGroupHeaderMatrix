@@ -74,6 +74,8 @@ interface DisplayCol {
 interface HeaderCell {
     label: string;
     span: number;
+    /** Index of the last display column this header cell spans. */
+    lastCol: number;
     key: string;
     togglable: boolean;
     collapsed: boolean;
@@ -152,6 +154,10 @@ export class Visual implements IVisual {
     private rowFormatApplyToHeaders: boolean = true;
     /** True when the row style is applied after (over) the cell conditional style. */
     private rowFormatWins: boolean = false;
+    private padV: number = 4;
+    private padH: number = 6;
+    private headerRowHeight: number = 0;
+    private rowHeightPx: number = 0;
     private measureFontColorSettings: string[] = [];
     private measureBgColorSettings: string[] = [];
     private gridShowHorizontal: boolean = true;
@@ -547,6 +553,14 @@ export class Visual implements IVisual {
         this.gridShowHorizontal = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grid", "showHorizontal", true);
         this.gridShowVertical = this.getObjectValue<boolean>(dataView?.metadata?.objects, "grid", "showVertical", true);
         this.gridThickness = this.getObjectValue<number>(dataView?.metadata?.objects, "grid", "thickness", 1) || 0;
+        const num = (prop: string, def: number, max: number) => {
+            const v = this.getObjectValue<number>(dataView?.metadata?.objects, "grid", prop, def);
+            return (typeof v === "number" && Number.isFinite(v)) ? Math.min(max, Math.max(0, v)) : def;
+        };
+        this.padV = num("paddingVertical", 4, 40);
+        this.padH = num("paddingHorizontal", 6, 40);
+        this.headerRowHeight = num("headerRowHeight", 0, 300);
+        this.rowHeightPx = num("rowHeight", 0, 300);
         this.gridColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "grid", "color", { value: fallbackGridColor } as any)) || fallbackGridColor;
         this.zebraEnabled = this.getObjectValue<boolean>(dataView?.metadata?.objects, "zebra", "enabled", false);
         this.zebraOddColor = this.parseColor(this.getObjectValue<any>(dataView?.metadata?.objects, "zebra", "oddColor", { value: fallbackZebraOdd } as any)) || fallbackZebraOdd;
@@ -853,12 +867,14 @@ export class Visual implements IVisual {
                 this.attachSortHandler(corner, "", this.compactLayout ? -1 : r, "label");
 
                 this.applyGridBorder(corner, true);
+                this.applyPadding(corner);
                 tr.appendChild(corner);
             }
         };
 
         headerRows.forEach((headerRow, i) => {
             const tr = document.createElement("tr");
+            if (this.headerRowHeight > 0) tr.style.height = `${this.headerRowHeight}px`;
             if (i === 0) appendCorner(tr);
             for (const cell of headerRow.cells) {
                 const th = document.createElement("th");
@@ -901,6 +917,10 @@ export class Visual implements IVisual {
                 if (this.colHeaderBg) th.style.backgroundColor = this.colHeaderBg;
                 if (cell.measureIndex !== undefined) this.applyMeasureHeaderStyle(th, txt, cell.measureIndex);
                 this.applyGridBorder(th, true);
+                this.applyPadding(th);
+                // A header ending at a column with a separator carries the same band
+                const lastCol = displayCols[cell.lastCol];
+                if (lastCol) this.applySeparator(th, lastCol.measureIndex);
                 th.appendChild(txt);
                 if (cell.span > 1) th.colSpan = cell.span;
 
@@ -940,6 +960,7 @@ export class Visual implements IVisual {
             handle.addEventListener("mousedown", (e) => this.beginResize(e as MouseEvent, ref.uniqueKey));
             th.appendChild(handle);
             this.applyGridBorder(th, true);
+            this.applySeparator(th, ref.measureIndex);
             resizerRow.appendChild(th);
         }
         thead.appendChild(resizerRow);
@@ -1051,6 +1072,7 @@ export class Visual implements IVisual {
 
                 const tr = document.createElement("tr");
                 if (rowInfo.isTotal) tr.className = "ghm-totalrow";
+                if (this.rowHeightPx > 0) tr.style.height = `${this.rowHeightPx}px`;
                 let zebraRowColor = "";
                 if (this.zebraEnabled && !rowInfo.isTotal && !rowMeasureBg && !(rowStyle && rowStyle.bg)) {
                     zebraRowColor = (rowInfo.bodyRowIndex % 2 === 0) ? this.zebraEvenColor : this.zebraOddColor;
@@ -1081,10 +1103,11 @@ export class Visual implements IVisual {
                     if (rowStyleColor) th.style.color = rowStyleColor;
                     if (headerRowStyle && headerRowStyle.bold) th.style.fontWeight = "bold";
                     this.applyGridBorder(th, true);
+                    this.applyPadding(th);
                     const depthIndent = (rowInfo as any).isTotal && (rowInfo as any).depth !== undefined
                         ? Math.max(0, Math.min(rowDepth - 1, (rowInfo as any).depth))
                         : Math.max(0, lastIdx);
-                    const basePad = 8, step = 14;
+                    const basePad = this.padH, step = 14;
                     th.style.paddingLeft = `${basePad + step * depthIndent}px`;
 
                     if ((rowInfo as any).toggleKey) {
@@ -1137,6 +1160,7 @@ export class Visual implements IVisual {
                         if (rowStyleColor) th.style.color = rowStyleColor;
                         if (headerRowStyle && headerRowStyle.bold) th.style.fontWeight = "bold";
                         this.applyGridBorder(th, true);
+                        this.applyPadding(th);
 
                         const toggleKeyAtLevel = (rowInfo as any).toggles ? (rowInfo as any).toggles[lvl] : ((rowInfo as any).toggleKey && lvl === toggleLevel ? (rowInfo as any).toggleKey : null);
 
@@ -1206,6 +1230,8 @@ export class Visual implements IVisual {
                     this.applyCellConditionalStyle(td, valuesMap, col);
                 }
                 this.applyGridBorder(td, false);
+                this.applyPadding(td);
+                this.applySeparator(td, col.measureIndex);
 
                 // Interaction (Multi-row mode)
                 if (rowSelectionId) {
@@ -1872,6 +1898,20 @@ export class Visual implements IVisual {
         return allowed.indexOf(lower) >= 0 ? lower : def;
     }
 
+    /** Cell padding from Format > Grid (defaults match the stylesheet: 4px / 6px). */
+    private applyPadding(el: HTMLElement) {
+        el.style.padding = `${this.padV}px ${this.padH}px`;
+    }
+
+    /** Coloured band after a measure's column (Format > Measure columns > Separator after column). */
+    private applySeparator(el: HTMLElement, measureIndex: number) {
+        const s = this.measureHeaderStyles[measureIndex];
+        const width = s && typeof s.separatorWidth === "number" ? s.separatorWidth : 0;
+        if (!(width > 0)) return;
+        const color = this.parseColor(s.separatorColor) || "#ffffff";
+        el.style.borderRight = `${width}px solid ${color}`;
+    }
+
     /** Applies the per-measure header overrides; properties the user never set keep the column-header style. */
     private applyMeasureHeaderStyle(th: HTMLElement, txt: HTMLElement, measureIndex: number) {
         const s = this.measureHeaderStyles[measureIndex];
@@ -2474,6 +2514,7 @@ export class Visual implements IVisual {
                     key,
                     togglable: isGroupLevel && !!label && collapsible.has(key),
                     collapsed: isGroupLevel && this.collapsedColKeys.has(key),
+                    lastCol: j - 1,
                     sortKey: (span === 1 && deepestLabel[i] === level) ? col.uniqueKey : undefined,
                     // Levels below the group levels hold the measure names
                     measureIndex: (level >= layout.groupDepth && span === 1) ? col.measureIndex : undefined

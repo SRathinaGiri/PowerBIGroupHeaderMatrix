@@ -332,7 +332,7 @@
             }
         },
         "measureHeader": {
-            "displayName": "Measure headers",
+            "displayName": "Measure columns",
             "properties": {
                 "fontFamily": { "type": { "formatting": { "fontFamily": true } } },
                 "fontSize": { "type": { "formatting": { "fontSize": true } } },
@@ -340,7 +340,9 @@
                 "italic": { "type": { "bool": true } },
                 "underline": { "type": { "bool": true } },
                 "fontColor": { "type": { "fill": { "solid": { "color": true } } } },
-                "backColor": { "type": { "fill": { "solid": { "color": true } } } }
+                "backColor": { "type": { "fill": { "solid": { "color": true } } } },
+                "separatorWidth": { "type": { "numeric": true } },
+                "separatorColor": { "type": { "fill": { "solid": { "color": true } } } }
             }
         },
         "colors": {
@@ -532,6 +534,10 @@
                         "numeric": true
                     }
                 },
+                "paddingVertical": { "type": { "numeric": true } },
+                "paddingHorizontal": { "type": { "numeric": true } },
+                "headerRowHeight": { "type": { "numeric": true } },
+                "rowHeight": { "type": { "numeric": true } },
                 "color": {
                     "type": {
                         "fill": {
