@@ -162,11 +162,21 @@
     z-index: 2;
 }
 
+/* Data cells take their base style from variables set once on the table (see
+   Visual.applyTableVariables); only per-cell differences are written inline. */
 .ghm-table td {
-    border: 1px solid #eee;
-    padding: 4px 6px;
-    text-align: right;
-    font-size: 11px;
+    padding: var(--ghm-pad, 4px 6px);
+    text-align: var(--ghm-val-h, right);
+    vertical-align: var(--ghm-val-v, middle);
+    font-size: var(--ghm-data-fs, 11px);
+    font-family: var(--ghm-data-ff, inherit);
+    font-weight: var(--ghm-data-fw, normal);
+    color: var(--ghm-data-color, inherit);
+    background-color: var(--ghm-cell-bg, transparent);
+    border-top: var(--ghm-border-h, 1px solid #eee);
+    border-bottom: var(--ghm-border-h, 1px solid #eee);
+    border-left: var(--ghm-border-v, 1px solid #eee);
+    border-right: var(--ghm-border-v, 1px solid #eee);
 }
 
 .ghm-toggle {

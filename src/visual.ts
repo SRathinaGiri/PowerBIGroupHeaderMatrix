@@ -28,8 +28,6 @@
 import powerbi from "powerbi-visuals-api";
 import { FormattingSettingsService } from "powerbi-visuals-utils-formattingmodel";
 import { valueFormatter } from "powerbi-visuals-utils-formattingutils";
-import { createTooltipServiceWrapper, ITooltipServiceWrapper } from "powerbi-visuals-utils-tooltiputils";
-import * as d3 from "d3-selection";
 import VisualTooltipDataItem = powerbi.extensibility.VisualTooltipDataItem;
 import "./../style/visual.less";
 
@@ -202,7 +200,13 @@ export class Visual implements IVisual {
 
     private host: IVisualHost;
     private selectionManager: ISelectionManager;
-    private tooltipServiceWrapper: ITooltipServiceWrapper;
+    private hostElement: HTMLElement;
+    /** Per rendered body row / cell data for the delegated tbody event handlers. */
+    private rowRefs: WeakMap<HTMLTableRowElement, { rowInfo: any; selectionId?: ISelectionId }> = new WeakMap();
+    private cellRefs: WeakMap<HTMLTableCellElement, { value: any; col: DisplayCol }> = new WeakMap();
+    /** Fingerprint of the last rendered data/formatting and of the view state it was rendered with. */
+    private lastRenderSig: string = "";
+    private lastRenderStateKey: string = "";
     private events: IVisualEventService;
     private resizeObserver: ResizeObserver | null = null;
     private selectedIds: ISelectionId[] = [];
@@ -224,12 +228,13 @@ export class Visual implements IVisual {
         this.formattingSettingsService = new FormattingSettingsService();
         this.host = options.host;
         this.selectionManager = options.host.createSelectionManager();
-        this.tooltipServiceWrapper = createTooltipServiceWrapper(options.host.tooltipService, options.element);
+        this.hostElement = options.element;
         this.events = options.host.eventService;
         this.allowInteractions = options.host.hostCapabilities?.allowInteractions !== false;
         this.selectionManager.registerOnSelectCallback((ids: ISelectionId[]) => {
             this.selectedIds = ids || [];
-            this.refresh();
+            // Selection only changes opacity/aria state: restyle in place, no re-render
+            this.applySelectionState();
         });
 
         // Root flex container
@@ -489,6 +494,7 @@ export class Visual implements IVisual {
 
         const objs = dataView?.metadata?.objects;
         this.debugFromSetting = this.getObjectValue<boolean>(objs, "state", "showDiagnostics", false) === true;
+        this.toolbar.style.display = this.getObjectValue<boolean>(objs, "state", "showToolbar", true) === false ? "none" : "";
         this.rowFormatApplyToHeaders = this.getObjectValue<boolean>(objs, "rowFormatting", "applyToRowHeaders", true) !== false;
         this.rowFormatWins = this.pickEnum(this.getObjectValue<any>(objs, "rowFormatting", "precedence", "cell"), ["cell", "row"], "cell") === "row";
         const hAlign = (prop: string, def: string) => this.pickEnum(this.getObjectValue<any>(objs, "alignment", prop, def), ["left", "center", "right"], def);
@@ -615,8 +621,19 @@ export class Visual implements IVisual {
             this.collapseInitialized = true;
         }
 
+        // Skip the render when nothing that affects the output changed: typically the echo of our
+        // own persistProperties (state already on screen) or a resize. Saves a full rebuild.
+        const renderSig = (dataView && dataView.matrix) ? this.computeRenderSignature(dataView, options) : "";
+        if (renderSig && this.table && renderSig === this.lastRenderSig && this.currentStateKey() === this.lastRenderStateKey) {
+            this.updateDebugOverlay();
+            this.events.renderingFinished(options);
+            return;
+        }
+
         // Clear only content (preserve toolbar)
         while (this.contentHost.firstChild) this.contentHost.removeChild(this.contentHost.firstChild);
+        this.table = null;
+        this.lastRenderSig = "";
 
         if (!dataView || !dataView.matrix) {
             this.renderLandingPage();
@@ -637,6 +654,8 @@ export class Visual implements IVisual {
             }
             this.loadLevelStyles(this.lastMatrix);
             this.renderMatrix(dataView.matrix);
+            this.lastRenderSig = renderSig;
+            this.lastRenderStateKey = this.currentStateKey();
             this.events.renderingFinished(options);
         } catch (e) {
             this.renderPlaceholder("Unable to render matrix");
@@ -770,9 +789,11 @@ export class Visual implements IVisual {
         // Apply a global font if only one family provided
         if (this.rowHeaderFontFamily && !this.colHeaderFontFamily) table.style.fontFamily = this.rowHeaderFontFamily;
         if (this.colHeaderFontFamily && !this.rowHeaderFontFamily) table.style.fontFamily = this.colHeaderFontFamily;
+        this.applyTableVariables(table);
         const colgroup = document.createElement("colgroup");
         const thead = document.createElement("thead");
         const tbody = document.createElement("tbody");
+        this.attachBodyEvents(tbody);
 
         // Measures handling: compute display measures vs style measures
         this.displayMeasureIndices = [];
@@ -1197,22 +1218,20 @@ export class Visual implements IVisual {
 
             const valuesMap: ValuesMap = (rowInfo as any).valuesMap || {};
             const rowAriaLabel = rowSelectionId ? this.getAccessibleRowLabel(rowInfo) : "";
+            // Clicks, keys, context menu and tooltips are handled once on the tbody (see
+            // attachBodyEvents); cells only record what those handlers need.
+            this.rowRefs.set(tr, { rowInfo, selectionId: rowSelectionId });
             for (let c = 0; c < colLeafCount; c++) {
                 const col = columnLeaves[c];
                 const globalM = col.measureIndex;
                 const td = document.createElement("td");
-                this.setAlignment(td, this.align.valuesH, this.align.valuesV);
                 const v = this.getCellValue(valuesMap, col);
                 td.textContent = this.formatValueByMeasure(v, globalM, this.getCellFormat(valuesMap, col));
-                if (this.dataFontSize) td.style.fontSize = `${this.dataFontSize}px`;
-                if (this.dataFontFamily) td.style.fontFamily = this.dataFontFamily;
-                if (this.dataBold) td.style.fontWeight = "bold";
-                if (this.cellColor) td.style.color = this.cellColor;
-                // Base background: column stripe, then row stripe, then cell background
+                // Font, colour, alignment, padding, grid and cell background come from table
+                // CSS variables; only differences from them are written inline.
                 let baseBg = "";
                 if (this.zebraColEnabled) baseBg = (c % 2 === 0) ? this.zebraColEvenColor : this.zebraColOddColor;
                 if (!baseBg) baseBg = zebraRowColor;
-                if (!baseBg && this.cellBg) baseBg = this.cellBg;
                 if (baseBg) td.style.backgroundColor = baseBg;
                 // Row and cell conditional styles sit on the base styles; whichever is applied
                 // last wins where both set the same property (Row formatting > precedence).
@@ -1229,45 +1248,15 @@ export class Visual implements IVisual {
                     applyRow();
                     this.applyCellConditionalStyle(td, valuesMap, col);
                 }
-                this.applyGridBorder(td, false);
-                this.applyPadding(td);
                 this.applySeparator(td, col.measureIndex);
 
-                // Interaction (Multi-row mode)
                 if (rowSelectionId) {
-                    const selectionId = rowSelectionId;
-                    td.style.opacity = (hasSelection && !rowIsSelected) ? "0.5" : "1";
+                    if (hasSelection && !rowIsSelected) td.style.opacity = "0.5";
                     td.tabIndex = 0;
                     td.setAttribute("aria-selected", String(rowIsSelected));
                     td.setAttribute("aria-label", `${rowAriaLabel} ${td.textContent || ""}`.trim());
-
-                    td.addEventListener("click", (e) => {
-                        this.selectionManager.select(selectionId, e.ctrlKey || e.metaKey).then(() => {
-                            this.selectedIds = this.selectionManager.getSelectionIds();
-                            this.refresh();
-                        });
-                        e.stopPropagation();
-                    });
-                    td.addEventListener("keydown", (e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            this.selectionManager.select(selectionId, e.ctrlKey || e.metaKey).then(() => {
-                                this.selectedIds = this.selectionManager.getSelectionIds();
-                                this.refresh();
-                            });
-                        }
-                    });
-                    td.addEventListener("contextmenu", (e) => {
-                        this.selectionManager.showContextMenu(selectionId, {x: e.clientX, y: e.clientY});
-                        e.preventDefault();
-                        e.stopPropagation();
-                    });
                 }
-
-                this.tooltipServiceWrapper.addTooltip(d3.select(td) as any, () => {
-                    return this.getTooltipData(v, rowInfo, col, globalM);
-                }, () => rowSelectionId || this.createEmptySelectionId());
-
+                this.cellRefs.set(td, { value: v, col });
                 tr.appendChild(td);
             }
             tbody.appendChild(tr);
@@ -1787,7 +1776,74 @@ export class Visual implements IVisual {
     private refresh() {
         // Re-render using the last received matrix
         while (this.contentHost.firstChild) this.contentHost.removeChild(this.contentHost.firstChild);
+        this.table = null;
         if (this.lastMatrix) this.renderMatrix(this.lastMatrix);
+        // The update that echoes our persisted state will match this and skip its render
+        this.lastRenderStateKey = this.currentStateKey();
+    }
+
+    /** View state that changes the rendered table but is persisted by the visual itself. */
+    private currentStateKey(): string {
+        return JSON.stringify([
+            Array.from(this.collapsedColKeys).sort(),
+            Array.from(this.collapsedRowKeys).sort(),
+            Array.from(this.columnWidthPx.entries()).sort(),
+            this.repeatLabels, this.compactLayout, this.viewMode, this.currentPage, this.pageSize
+        ]);
+    }
+
+    /**
+     * Fingerprint of everything else the render depends on: formatting objects (minus the state the
+     * visual persists itself), measure metadata, both hierarchies with their values, host flags.
+     */
+    private computeRenderSignature(dataView: DataView, options: VisualUpdateOptions): string {
+        let h1 = 0x811c9dc5, h2 = 5381, len = 0;
+        const feed = (s: string) => {
+            for (let i = 0; i < s.length; i++) {
+                const c = s.charCodeAt(i);
+                h1 = Math.imul(h1 ^ c, 16777619);
+                h2 = (Math.imul(h2, 33) + c) | 0;
+            }
+            len += s.length;
+            h1 = Math.imul(h1 ^ 31, 16777619); // separator between fields
+        };
+        const persisted = new Set(["columnWidths", "collapsedCols", "collapsedRows", "repeatLabels", "compactLayout", "viewMode", "currentPage"]);
+        const objects: any = (dataView.metadata && dataView.metadata.objects) || {};
+        for (const name of Object.keys(objects).sort()) {
+            const obj = objects[name] || {};
+            for (const prop of Object.keys(obj).sort()) {
+                if (name === "state" && persisted.has(prop)) continue;
+                feed(`${name}.${prop}=${JSON.stringify(obj[prop])}`);
+            }
+        }
+        const m = dataView.matrix!;
+        for (const vs of (m.valueSources || []) as any[]) {
+            feed(`${vs.queryName}|${vs.displayName}|${vs.format}|${Object.keys(vs.roles || {}).join(",")}|${vs.objects ? JSON.stringify(vs.objects) : ""}`);
+        }
+        const hier = (hierarchy: DataViewHierarchy | undefined) => {
+            if (!hierarchy) return;
+            for (const lvl of hierarchy.levels || []) {
+                for (const s of lvl.sources || []) feed(`L:${s.queryName}|${s.displayName}|${s.format}|${(s as any).isMeasure ? 1 : 0}`);
+            }
+            const walk = (n: DataViewMatrixNode) => {
+                feed(`N:${n.level}|${n.levelSourceIndex}|${(n as any).isSubtotal ? 1 : 0}|${this.nodeKey(n)}`);
+                const values: any = n.values;
+                if (values) {
+                    for (const k in values) {
+                        const c = values[k];
+                        feed(`${k}=${c && c.value}${c && c.objects ? JSON.stringify(c.objects) : ""}`);
+                    }
+                }
+                for (const ch of n.children || []) walk(ch);
+            };
+            if (hierarchy.root) walk(hierarchy.root);
+        };
+        hier(m.rows);
+        hier(m.columns);
+        feed(`hc=${this.isHighContrast}|ai=${this.allowInteractions}`);
+        // Only virtualization depends on the viewport size
+        if (this.viewMode === "virtualization" && options.viewport) feed(`vh=${Math.round(options.viewport.height)}`);
+        return `${(h1 >>> 0).toString(16)}-${(h2 >>> 0).toString(16)}-${len}`;
     }
 
     private applyStickyOffsets(thead: HTMLTableSectionElement) {
@@ -1896,6 +1952,113 @@ export class Visual implements IVisual {
         const v = typeof input === "string" ? input : (input && typeof input.value === "string" ? input.value : "");
         const lower = v.toLowerCase();
         return allowed.indexOf(lower) >= 0 ? lower : def;
+    }
+
+    /** Base data-cell style, set once per table instead of on every cell (see .ghm-table td). */
+    private applyTableVariables(table: HTMLTableElement) {
+        const set = (name: string, value: string) => { if (value) table.style.setProperty(name, value); };
+        set("--ghm-pad", `${this.padV}px ${this.padH}px`);
+        set("--ghm-val-h", this.align.valuesH);
+        set("--ghm-val-v", this.align.valuesV);
+        if (this.dataFontSize) set("--ghm-data-fs", `${this.dataFontSize}px`);
+        set("--ghm-data-ff", this.dataFontFamily);
+        if (this.dataBold) set("--ghm-data-fw", "bold");
+        set("--ghm-data-color", this.cellColor || "");
+        set("--ghm-cell-bg", this.cellBg || "");
+        const thick = Math.max(0, this.gridThickness || 0);
+        const line = `${thick}px solid ${this.gridColor || "#d0d0d0"}`;
+        table.style.setProperty("--ghm-border-h", thick && this.gridShowHorizontal ? line : "none");
+        table.style.setProperty("--ghm-border-v", thick && this.gridShowVertical ? line : "none");
+    }
+
+    /**
+     * One set of listeners per tbody instead of several per cell: selection (click/Enter/Space),
+     * context menu and tooltips find their row and cell through rowRefs / cellRefs.
+     */
+    private attachBodyEvents(tbody: HTMLTableSectionElement) {
+        const cellOf = (e: Event): HTMLTableCellElement | null => {
+            const el = e.target as HTMLElement | null;
+            const td = el && el.closest ? el.closest("td") : null;
+            return td && tbody.contains(td) ? td as HTMLTableCellElement : null;
+        };
+        const rowOf = (td: HTMLTableCellElement | null) => td ? this.rowRefs.get(td.parentElement as HTMLTableRowElement) : undefined;
+        const select = (id: ISelectionId, multi: boolean) => {
+            this.selectionManager.select(id, multi).then(() => {
+                this.selectedIds = this.selectionManager.getSelectionIds();
+                this.applySelectionState();
+            });
+        };
+        tbody.addEventListener("click", (e) => {
+            const ref = rowOf(cellOf(e));
+            if (!ref || !ref.selectionId) return;
+            select(ref.selectionId, e.ctrlKey || e.metaKey);
+            e.stopPropagation();
+        });
+        tbody.addEventListener("keydown", (e) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            const ref = rowOf(cellOf(e));
+            if (!ref || !ref.selectionId) return;
+            e.preventDefault();
+            select(ref.selectionId, e.ctrlKey || e.metaKey);
+        });
+        tbody.addEventListener("contextmenu", (e) => {
+            const ref = rowOf(cellOf(e));
+            if (!ref || !ref.selectionId) return; // falls through to the visual-level menu
+            this.selectionManager.showContextMenu(ref.selectionId, { x: e.clientX, y: e.clientY });
+            e.preventDefault();
+            e.stopPropagation();
+        });
+
+        // Tooltips: built when the pointer enters a cell, moved while it stays there
+        const tooltip = this.host.tooltipService;
+        let current: { td: HTMLTableCellElement; args: any } | null = null;
+        const coords = (e: MouseEvent): number[] => {
+            const rect = this.hostElement.getBoundingClientRect();
+            return [e.clientX - rect.left, e.clientY - rect.top];
+        };
+        const hide = () => {
+            if (current) tooltip.hide({ immediately: true, isTouchEvent: false });
+            current = null;
+        };
+        tbody.addEventListener("mousemove", (e) => {
+            if (!tooltip || !tooltip.enabled()) return;
+            const td = cellOf(e);
+            const cell = td ? this.cellRefs.get(td) : undefined;
+            if (!td || !cell) { hide(); return; }
+            if (current && current.td === td) {
+                current.args.coordinates = coords(e);
+                tooltip.move(current.args);
+                return;
+            }
+            const ref = rowOf(td);
+            const args = {
+                coordinates: coords(e),
+                isTouchEvent: false,
+                dataItems: this.getTooltipData(cell.value, ref && ref.rowInfo, cell.col, cell.col.measureIndex),
+                identities: [(ref && ref.selectionId) || this.createEmptySelectionId()]
+            };
+            current = { td, args };
+            tooltip.show(args);
+        });
+        tbody.addEventListener("mouseleave", hide);
+    }
+
+    /** Re-applies selection dimming and aria-selected to the rendered rows without re-rendering. */
+    private applySelectionState() {
+        const tbody = this.table && this.table.tBodies[0];
+        if (!tbody) return;
+        const current = this.selectedIds.length ? this.selectedIds : this.selectionManager.getSelectionIds();
+        const hasSelection = current.length > 0 || this.selectionManager.hasSelection();
+        for (const tr of Array.from(tbody.rows)) {
+            const ref = this.rowRefs.get(tr);
+            if (!ref || !ref.selectionId) continue;
+            const selected = current.some(id => this.selectionIdsMatch(id, ref.selectionId!));
+            for (const td of Array.from(tr.cells)) {
+                if (td.tagName !== "TD") continue;
+                td.style.opacity = (hasSelection && !selected) ? "0.5" : "";
+                td.setAttribute("aria-selected", String(selected));
+            }
+        }
     }
 
     /** Cell padding from Format > Grid (defaults match the stylesheet: 4px / 6px). */

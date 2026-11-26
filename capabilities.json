@@ -132,6 +132,11 @@
                         "numeric": true
                     }
                 },
+                "showToolbar": {
+                    "type": {
+                        "bool": true
+                    }
+                },
                 "showDiagnostics": {
                     "type": {
                         "bool": true
