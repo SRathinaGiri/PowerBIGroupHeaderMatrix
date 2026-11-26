@@ -118,7 +118,8 @@ RETURN
         "Year Index", YEAR([Date]) - 2024
     )'''
 
-# Each property gets its own seasonal phase and cost ratio; leisure properties swing more
+# Each property gets its own seasonal phase and cost ratio; leisure properties swing more.
+# Plan differs from Actual by roughly +/-7% depending on account group, month and property.
 FACT = r'''
 VAR Months = SELECTCOLUMNS('PL Calendar', "Month Start", 'PL Calendar'[Month Start], "MN", 'PL Calendar'[Month No], "YI", 'PL Calendar'[Year Index])
 VAR Accounts = SELECTCOLUMNS(FILTER('PL Lines', 'PL Lines'[Base] <> 0), "GL Key", 'PL Lines'[GL Key], "B", 'PL Lines'[Base])
@@ -141,7 +142,9 @@ RETURN
                     * (1 + 0.05 * SIN([GL Key] * 0.37 + [MN] * 0.9))
                     * POWER(1.07 + [PN] * 0.004, [YI])
                     * IF([GL Key] >= 5000 && [GL Key] < 9000, 0.86 + MOD([PN] * 7, 10) * 0.03, 1)
-                    * IF([Version] = "Plan", 1.05 + 0.04 * COS([GL Key] + [MN] * 0.3 + [PN]), 1),
+                    * IF([Version] = "Plan",
+                        1 + 0.06 * SIN([MN] * 0.6 + INT([GL Key] / 100) * 0.8) + 0.03 * SIN([PN] * 1.9 + [MN]),
+                        1),
                 2
             )
     )'''
