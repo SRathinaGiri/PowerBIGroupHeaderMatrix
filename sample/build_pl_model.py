@@ -220,7 +220,10 @@ MEASURES = [
     ("Style Fill None", "BLANK()", None, None, "P&L\\Styles", False),
     ("Style Fill None 2", "BLANK()", None, None, "P&L\\Styles", False),
     ("Style Fill Plan", "\"#FFF2CC\"", None, None, "P&L\\Styles", False),
-    ("Style Font Below Plan", f"IF(NOT {IS_RATIO} && NOT ISBLANK([Plan]) && [vs Plan %] < 0.95, \"#C00000\")", None, None, "P&L\\Styles", False),
+    # Red when a line is worse than plan. Amounts are signed (costs negative), so revenue below
+    # plan and costs over plan are both Actual < Plan.
+    ("Style Font Below Plan", f"IF(NOT {IS_RATIO} && NOT ISBLANK([Plan]) && NOT ISBLANK([Actual]) && [Actual] < [Plan], \"#C00000\")",
+     None, None, "P&L\\Styles", False),
 ]
 
 NEW_TABLES = ["PL Fact", "PL Lines", "PL Property", "PL Calendar"]
