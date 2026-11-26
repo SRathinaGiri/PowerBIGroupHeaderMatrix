@@ -18,39 +18,90 @@ import Microsoft.AnalysisServices.Tabular as TOM  # noqa: E402
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else "localhost:50667"
 
-# Line Key, Line, Detail, Line Order, Kind, Emphasis, monthly base amount (thousands)
-LINES = r'''
-DATATABLE(
-    "Line Key", INTEGER, "Line", STRING, "Detail", STRING, "Line Order", INTEGER,
-    "Kind", STRING, "Emphasis", BOOLEAN, "Base", DOUBLE,
-    {
-        { 11, "Room Revenue", "Leisure Stays", 1, "Value", FALSE, 820 },
-        { 12, "Room Revenue", "Corporate Stays", 1, "Value", FALSE, 540 },
-        { 21, "Food & Beverage", "Restaurants", 2, "Value", FALSE, 310 },
-        { 22, "Food & Beverage", "Banquets & Events", 2, "Value", FALSE, 260 },
-        { 31, "Discounts & Rebates", "Loyalty Rebates", 3, "Value", FALSE, -45 },
-        { 32, "Discounts & Rebates", "Promotional Offers", 3, "Value", FALSE, -38 },
-        { 40, "Total Revenue", "Total Revenue", 4, "Value", TRUE, 0 },
-        { 51, "Staff Cost", "Front Office", 5, "Value", FALSE, -190 },
-        { 52, "Staff Cost", "Housekeeping", 5, "Value", FALSE, -160 },
-        { 53, "Staff Cost", "Kitchen", 5, "Value", FALSE, -120 },
-        { 61, "Cost of F&B Sold", "Food Cost", 6, "Value", FALSE, -150 },
-        { 62, "Cost of F&B Sold", "Beverage Cost", 6, "Value", FALSE, -55 },
-        { 70, "Contribution", "Contribution", 7, "Value", TRUE, 0 },
-        { 80, "Contribution Margin %", "Contribution Margin %", 8, "Ratio", FALSE, 0 },
-        { 90, "Staff Cost % of Revenue", "Staff Cost % of Revenue", 9, "Ratio", FALSE, 0 },
-        { 101, "Overheads", "Energy", 10, "Value", FALSE, -95 },
-        { 102, "Overheads", "Maintenance", 10, "Value", FALSE, -70 },
-        { 103, "Overheads", "Lease & Admin", 10, "Value", FALSE, -130 },
-        { 110, "Operating Profit", "Operating Profit", 11, "Value", TRUE, 0 },
-        { 120, "Operating Margin %", "Operating Margin %", 12, "Ratio", FALSE, 0 }
-    }
-)'''
+# Chart of accounts: Line -> Detail -> GL accounts (code, name, monthly base amount in thousands).
+# Lines without details are calculated (subtotals and ratios); they get a single Detail/GL row.
+# (line, kind, emphasis, [(detail, [(gl_code, gl_name, base), ...]), ...])
+CHART = [
+    ("Room Revenue", "Value", False, [
+        ("Leisure Stays", [(4101, "Direct Bookings", 260), (4102, "Online Travel Agents", 340), (4103, "Package Holidays", 220)]),
+        ("Corporate Stays", [(4111, "Corporate Contracts", 300), (4112, "Government & Embassy", 90), (4113, "Airline Crew", 150)]),
+    ]),
+    ("Food & Beverage", "Value", False, [
+        ("Restaurants", [(4201, "All-Day Dining", 140), (4202, "Speciality Restaurant", 95), (4203, "In-Room Dining", 75)]),
+        ("Banquets & Events", [(4211, "Weddings", 120), (4212, "Conferences", 95), (4213, "Outdoor Catering", 45)]),
+    ]),
+    ("Discounts & Rebates", "Value", False, [
+        ("Loyalty Rebates", [(4301, "Points Redemption", -25), (4302, "Member Discounts", -20)]),
+        ("Promotional Offers", [(4311, "Seasonal Offers", -22), (4312, "Corporate Rebates", -16)]),
+    ]),
+    ("Total Revenue", "Value", True, []),
+    ("Staff Cost", "Value", False, [
+        ("Front Office", [(5101, "Front Office Wages", -140), (5102, "Front Office Overtime", -28), (5103, "Front Office Training", -12), (5104, "Uniforms", -10)]),
+        ("Housekeeping", [(5111, "Housekeeping Wages", -115), (5112, "Contract Labour", -35), (5113, "Housekeeping Supplies", -10)]),
+        ("Kitchen", [(5121, "Chefs & Cooks", -85), (5122, "Stewarding", -25), (5123, "Staff Meals", -10)]),
+    ]),
+    ("Cost of F&B Sold", "Value", False, [
+        ("Food Cost", [(5201, "Meat & Seafood", -60), (5202, "Dairy & Produce", -45), (5203, "Dry Goods", -45)]),
+        ("Beverage Cost", [(5211, "Wines & Spirits", -32), (5212, "Soft Drinks", -14), (5213, "Coffee & Tea", -9)]),
+    ]),
+    ("Contribution", "Value", True, []),
+    ("Contribution Margin %", "Ratio", False, []),
+    ("Staff Cost % of Revenue", "Ratio", False, []),
+    ("Overheads", "Value", False, [
+        ("Energy", [(6101, "Electricity", -55), (6102, "Water", -15), (6103, "Gas & Fuel", -25)]),
+        ("Maintenance", [(6111, "Repairs", -30), (6112, "Service Contracts", -22), (6113, "Landscaping", -18)]),
+        ("Lease & Admin", [(6121, "Lease Rent", -70), (6122, "Insurance", -20), (6123, "IT & Software", -18), (6124, "Professional Fees", -22)]),
+    ]),
+    ("Operating Profit", "Value", True, []),
+    ("Operating Margin %", "Ratio", False, []),
+]
 
+
+def build_lines_table() -> str:
+    rows = []
+    detail_order = 0
+    for line_order, (line, kind, emphasis, details) in enumerate(CHART, start=1):
+        flag = "TRUE" if emphasis else "FALSE"
+        if not details:
+            detail_order += 1
+            key = 9000 + line_order  # calculated line: one Detail and one GL row named after it
+            rows.append(f'{{ {key}, "{line}", {detail_order}, "{line}", "{line}", {line_order}, "{kind}", {flag}, 0 }}')
+            continue
+        for detail, accounts in details:
+            detail_order += 1
+            for code, name, base in accounts:
+                rows.append(f'{{ {code}, "{code} - {name}", {detail_order}, "{detail}", "{line}", {line_order}, "{kind}", {flag}, {base} }}')
+    body = ",\n        ".join(rows)
+    return f"""
+DATATABLE(
+    "GL Key", INTEGER, "GL Code", STRING, "Detail Order", INTEGER, "Detail", STRING, "Line", STRING,
+    "Line Order", INTEGER, "Kind", STRING, "Emphasis", BOOLEAN, "Base", DOUBLE,
+    {{
+        {body}
+    }}
+)"""
+
+
+LINES = build_lines_table()
+
+# Weights add up to 1 within a region; Scale makes the regions differ in size
 PROPERTIES = r'''
 DATATABLE(
-    "Property", STRING, "Segment", STRING, "Weight", DOUBLE,
-    { { "City Centre Hotel", "Urban", 0.45 }, { "Airport Inn", "Urban", 0.25 }, { "Beach Resort", "Leisure", 0.30 } }
+    "Property No", INTEGER, "Property", STRING, "Region", STRING, "City", STRING, "Segment", STRING, "Weight", DOUBLE, "Scale", DOUBLE,
+    {
+        { 1, "Harbour View Hotel", "North", "Lakeport", "Urban", 0.34, 1.00 },
+        { 2, "Lakeport Airport Inn", "North", "Lakeport", "Urban", 0.22, 1.00 },
+        { 3, "Pine Ridge Lodge", "North", "Pine Ridge", "Leisure", 0.18, 1.00 },
+        { 4, "Northgate Suites", "North", "Northgate", "Urban", 0.26, 1.00 },
+        { 5, "Central Plaza Hotel", "Central", "Midvale", "Urban", 0.31, 0.80 },
+        { 6, "Midvale Business Hotel", "Central", "Midvale", "Urban", 0.24, 0.80 },
+        { 7, "Riverside Retreat", "Central", "Riverbend", "Leisure", 0.20, 0.80 },
+        { 8, "Old Town Boutique", "Central", "Riverbend", "Urban", 0.25, 0.80 },
+        { 9, "Sunset Beach Resort", "South", "Coral Bay", "Leisure", 0.36, 1.25 },
+        { 10, "Coral Bay Villas", "South", "Coral Bay", "Leisure", 0.22, 1.25 },
+        { 11, "Southport Conference Hotel", "South", "Southport", "Urban", 0.27, 1.25 },
+        { 12, "Palm Grove Inn", "South", "Southport", "Leisure", 0.15, 1.25 }
+    }
 )'''
 
 # Calendar-year months Jan-2024 .. Dec-2026
@@ -67,27 +118,31 @@ RETURN
         "Year Index", YEAR([Date]) - 2024
     )'''
 
+# Each property gets its own seasonal phase and cost ratio; leisure properties swing more
 FACT = r'''
 VAR Months = SELECTCOLUMNS('PL Calendar', "Month Start", 'PL Calendar'[Month Start], "MN", 'PL Calendar'[Month No], "YI", 'PL Calendar'[Year Index])
-VAR Lines = SELECTCOLUMNS(FILTER('PL Lines', 'PL Lines'[Base] <> 0), "Line Key", 'PL Lines'[Line Key], "B", 'PL Lines'[Base])
-VAR Props = SELECTCOLUMNS('PL Property', "Property", 'PL Property'[Property], "W", 'PL Property'[Weight])
+VAR Accounts = SELECTCOLUMNS(FILTER('PL Lines', 'PL Lines'[Base] <> 0), "GL Key", 'PL Lines'[GL Key], "B", 'PL Lines'[Base])
+VAR Props = SELECTCOLUMNS('PL Property', "Property", 'PL Property'[Property], "PN", 'PL Property'[Property No],
+    "W", 'PL Property'[Weight] * 'PL Property'[Scale], "Swing", IF('PL Property'[Segment] = "Leisure", 0.22, 0.10))
 VAR Versions = DATATABLE("Version", STRING, { { "Actual" }, { "Plan" } })
-VAR AllRows = GENERATE(GENERATE(GENERATE(Months, Lines), Props), Versions)
+VAR AllRows = GENERATE(GENERATE(GENERATE(Months, Accounts), Props), Versions)
 VAR Kept = FILTER(AllRows, [Version] = "Plan" || [Month Start] <= DATE(2026, 8, 1))
 RETURN
     SELECTCOLUMNS(
         Kept,
         "Month Start", [Month Start],
         "Property", [Property],
-        "Line Key", [Line Key],
+        "GL Key", [GL Key],
         "Version", [Version],
         "Amount",
             ROUND(
                 [B] * [W]
-                    * (1 + 0.12 * SIN([MN] * 0.52 + [Line Key] / 7))
-                    * POWER(1.09, [YI])
-                    * IF([Version] = "Plan", 1.05 + 0.04 * COS([Line Key] + [MN] * 0.3), 1),
-                1
+                    * (1 + [Swing] * SIN([MN] * 0.52 + [PN] * 1.3))
+                    * (1 + 0.05 * SIN([GL Key] * 0.37 + [MN] * 0.9))
+                    * POWER(1.07 + [PN] * 0.004, [YI])
+                    * IF([GL Key] >= 5000 && [GL Key] < 9000, 0.86 + MOD([PN] * 7, 10) * 0.03, 1)
+                    * IF([Version] = "Plan", 1.05 + 0.04 * COS([GL Key] + [MN] * 0.3 + [PN]), 1),
+                2
             )
     )'''
 
@@ -219,25 +274,32 @@ def main():
     fact = model.Tables.Find("PL Fact")
 
     col(lines, "Line").SortByColumn = col(lines, "Line Order")
-    col(lines, "Detail").SortByColumn = col(lines, "Line Key")
-    for c in ["Line Order", "Base", "Line Key"]:
+    col(lines, "Detail").SortByColumn = col(lines, "Detail Order")
+    col(lines, "GL Code").SortByColumn = col(lines, "GL Key")
+    for c in ["Line Order", "Detail Order", "Base", "GL Key"]:
         col(lines, c).IsHidden = True
-    col(prop, "Weight").IsHidden = True
+    for c in ["Weight", "Scale", "Property No"]:
+        col(prop, c).IsHidden = True
     col(cal, "Month").SortByColumn = col(cal, "Month No")
     for c in ["Month No", "Year Index"]:
         col(cal, c).IsHidden = True
-    for c in ["Month Start", "Property", "Line Key", "Amount"]:
+    for c in ["Month Start", "Property", "GL Key", "Amount"]:
         col(fact, c).IsHidden = True
 
-    h = TOM.Hierarchy()
-    h.Name = "P&L"
-    for i, c in enumerate(["Line", "Detail"]):
-        lvl = TOM.Level()
-        lvl.Name = c
-        lvl.Ordinal = i
-        lvl.Column = col(lines, c)
-        h.Levels.Add(lvl)
-    lines.Hierarchies.Add(h)
+    def hierarchy(table, name, columns):
+        h = TOM.Hierarchy()
+        h.Name = name
+        for i, c in enumerate(columns):
+            lvl = TOM.Level()
+            lvl.Name = c
+            lvl.Ordinal = i
+            lvl.Column = col(table, c)
+            h.Levels.Add(lvl)
+        table.Hierarchies.Add(h)
+
+    hierarchy(lines, "P&L", ["Line", "Detail", "GL Code"])
+    hierarchy(prop, "Location", ["Region", "City", "Property"])
+    hierarchy(cal, "Period", ["Year", "Quarter", "Month"])
 
     def rel(from_t, from_c, to_t, to_c):
         r = TOM.SingleColumnRelationship()
@@ -250,7 +312,7 @@ def main():
 
     rel(fact, "Month Start", cal, "Month Start")
     rel(fact, "Property", prop, "Property")
-    rel(fact, "Line Key", lines, "Line Key")
+    rel(fact, "GL Key", lines, "GL Key")
 
     for name, expr, fmt, dyn, folder, hidden in MEASURES:
         m = TOM.Measure()
