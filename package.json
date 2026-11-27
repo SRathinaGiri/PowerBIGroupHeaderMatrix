@@ -1,7 +1,7 @@
 {
   "name": "group-header-matrix",
   "description": "Excel-like grouped header matrix custom visual for Microsoft Power BI.",
-  "version": "1.0.0.0",
+  "version": "1.1.0.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/SRathinaGiri/PowerBIGroupHeaderMatrix.git"
@@ -11,27 +11,23 @@
     "pbiviz": "pbiviz",
     "start": "pbiviz start",
     "package": "pbiviz package --certification-audit",
-    "eslint": "npx eslint src --ext .ts",
+    "eslint": "npx eslint . --ext .js,.jsx,.ts,.tsx",
     "lint": "npm run eslint"
   },
   "dependencies": {
-    "@types/d3": "7.4.3",
-    "@types/d3-selection": "^3.0.11",
-    "d3": "7.9.0",
-    "d3-selection": "^3.0.0",
-    "powerbi-visuals-api": "~5.11.0",
+    "powerbi-visuals-api": "~5.11.2",
     "powerbi-visuals-utils-formattingmodel": "6.2.2",
-    "powerbi-visuals-utils-formattingutils": "6.1.2",
-    "powerbi-visuals-utils-tooltiputils": "^6.0.4"
+    "powerbi-visuals-utils-formattingutils": "6.1.2"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.8.0",
     "eslint": "^9.11.1",
     "eslint-plugin-powerbi-visuals": "^1.1.1",
-    "powerbi-visuals-tools": "^7.1.1",
+    "powerbi-visuals-tools": "^7.2.1",
     "typescript": "5.5.4"
   },
   "overrides": {
-    "uuid": "^11.1.1"
+    "uuid": "^11.1.1",
+    "qs": "^6.17.1"
   }
 }

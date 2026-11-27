@@ -413,14 +413,6 @@ export class Visual implements IVisual {
         this.toolbar.appendChild(lblPage);
         this.toolbar.appendChild(btnNextPage);
 
-        const btnDebug = document.createElement("button");
-        btnDebug.className = "ghm-btn";
-        btnDebug.type = "button";
-        btnDebug.textContent = "🧪 Debug";
-        btnDebug.addEventListener("click", () => { this.debugEnabled = !this.debugEnabled; this.updateDebugOverlay(); });
-        // Hide debug button in production
-        try { (btnDebug as any).style.display = "none"; } catch {}
-        this.toolbar.appendChild(btnDebug);
 
         // content host inside scroll container
         this.contentHost = document.createElement("div");
@@ -666,8 +658,8 @@ export class Visual implements IVisual {
             this.events.renderingFinished(options);
         } catch (e) {
             this.renderPlaceholder("Unable to render matrix");
+            // Reported to the host; no console output (certification: no console errors for any input)
             this.events.renderingFailed(options, e instanceof Error ? e.message : "Unable to render matrix");
-            console.error(e);
         }
     }
 
@@ -687,34 +679,6 @@ export class Visual implements IVisual {
             }
         }
         return model;
-    }
-
-    public enumerateObjectInstances(options: powerbi.EnumerateVisualObjectInstancesOptions): powerbi.VisualObjectInstanceEnumeration {
-        const enumeration: powerbi.VisualObjectInstance[] = [];
-        if (!this.lastMatrix) return enumeration;
-
-        if (options.objectName === "measureColors") {
-            const vsArr = (this.lastMatrix.valueSources || []) as any[];
-            vsArr.forEach((vs, i) => {
-                const roles = (vs as any).roles || {};
-                if (!roles.measure) return;
-                const displayName = (vs as any).displayName || (vs as any).queryName || `Measure ${i + 1}`;
-                const selector: any = (vs as any).queryName ? { metadata: (vs as any).queryName } : null;
-                const obj = (vs as any).objects || {};
-                const font = this.parseColor(obj.measureColors && (obj.measureColors as any).cellFontColor) || "";
-                const bg = this.parseColor(obj.measureColors && (obj.measureColors as any).cellBgColor) || "";
-                enumeration.push({
-                    objectName: options.objectName,
-                    displayName,
-                    properties: {
-                        cellFontColor: font,
-                        cellBgColor: bg
-                    },
-                    selector
-                });
-            });
-        }
-        return enumeration;
     }
 
     private renderPlaceholder(text: string) {
